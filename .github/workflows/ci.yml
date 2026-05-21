@@ -17,4 +17,6 @@ jobs:
           node-version: '16'
       - run: npm install
       - run: npm run lint
-      - run: npm test
+      # Integration tests (test:integration) spin up a WAX chain via Docker
+      # (qtest-js) and are run locally — see CONTRIBUTING.md. CI runs unit tests.
+      - run: npm run test:unit

@@ -1,0 +1,684 @@
+{
+    "____comment": "This file was generated with eosio-abigen. DO NOT EDIT ",
+    "version": "eosio::abi/1.2",
+    "types": [],
+    "structs": [
+        {
+            "name": "acctstate",
+            "base": "",
+            "fields": [
+                {
+                    "name": "dapp",
+                    "type": "name"
+                },
+                {
+                    "name": "stake",
+                    "type": "asset"
+                },
+                {
+                    "name": "credits",
+                    "type": "uint32"
+                },
+                {
+                    "name": "fee_balance",
+                    "type": "asset"
+                },
+                {
+                    "name": "last_nonce",
+                    "type": "uint64"
+                },
+                {
+                    "name": "last_update",
+                    "type": "time_point_sec"
+                }
+            ]
+        },
+        {
+            "name": "balrow",
+            "base": "",
+            "fields": [
+                {
+                    "name": "oracle",
+                    "type": "name"
+                },
+                {
+                    "name": "unpaid",
+                    "type": "asset"
+                }
+            ]
+        },
+        {
+            "name": "ban",
+            "base": "",
+            "fields": [
+                {
+                    "name": "dapp",
+                    "type": "name"
+                }
+            ]
+        },
+        {
+            "name": "ban_list_a",
+            "base": "",
+            "fields": [
+                {
+                    "name": "dapp",
+                    "type": "name"
+                }
+            ]
+        },
+        {
+            "name": "claim",
+            "base": "",
+            "fields": [
+                {
+                    "name": "oracle",
+                    "type": "name"
+                }
+            ]
+        },
+        {
+            "name": "cleanup",
+            "base": "",
+            "fields": [
+                {
+                    "name": "oracle",
+                    "type": "name"
+                },
+                {
+                    "name": "batch_size",
+                    "type": "uint64"
+                }
+            ]
+        },
+        {
+            "name": "config_a",
+            "base": "",
+            "fields": [
+                {
+                    "name": "name",
+                    "type": "uint64"
+                },
+                {
+                    "name": "value",
+                    "type": "int64"
+                }
+            ]
+        },
+        {
+            "name": "configv2",
+            "base": "",
+            "fields": [
+                {
+                    "name": "fee_per_call",
+                    "type": "asset"
+                },
+                {
+                    "name": "strike_max",
+                    "type": "uint8"
+                },
+                {
+                    "name": "k_calls_per_wax",
+                    "type": "uint8"
+                },
+                {
+                    "name": "treas_hardfloor",
+                    "type": "uint64"
+                }
+            ]
+        },
+        {
+            "name": "getresult",
+            "base": "",
+            "fields": [
+                {
+                    "name": "caller",
+                    "type": "name"
+                },
+                {
+                    "name": "assoc_id",
+                    "type": "uint64"
+                }
+            ]
+        },
+        {
+            "name": "killjobs",
+            "base": "",
+            "fields": [
+                {
+                    "name": "job_ids",
+                    "type": "uint64[]"
+                }
+            ]
+        },
+        {
+            "name": "markfailed",
+            "base": "",
+            "fields": [
+                {
+                    "name": "oracle",
+                    "type": "name"
+                },
+                {
+                    "name": "id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "ver",
+                    "type": "uint8"
+                },
+                {
+                    "name": "sig",
+                    "type": "string"
+                },
+                {
+                    "name": "error_message",
+                    "type": "string"
+                }
+            ]
+        },
+        {
+            "name": "orinfo",
+            "base": "",
+            "fields": [
+                {
+                    "name": "oracle",
+                    "type": "name"
+                },
+                {
+                    "name": "oracle_index",
+                    "type": "uint8"
+                },
+                {
+                    "name": "strikes",
+                    "type": "uint8"
+                },
+                {
+                    "name": "suspended",
+                    "type": "bool"
+                }
+            ]
+        },
+        {
+            "name": "part",
+            "base": "",
+            "fields": [
+                {
+                    "name": "idx",
+                    "type": "uint8"
+                },
+                {
+                    "name": "sig_i",
+                    "type": "string"
+                }
+            ]
+        },
+        {
+            "name": "pause",
+            "base": "",
+            "fields": [
+                {
+                    "name": "paused",
+                    "type": "bool"
+                }
+            ]
+        },
+        {
+            "name": "pauserequest",
+            "base": "",
+            "fields": [
+                {
+                    "name": "paused",
+                    "type": "bool"
+                }
+            ]
+        },
+        {
+            "name": "pubkey",
+            "base": "",
+            "fields": [
+                {
+                    "name": "ver",
+                    "type": "uint8"
+                },
+                {
+                    "name": "pubkey_hash_id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "exponent",
+                    "type": "string"
+                },
+                {
+                    "name": "modulus",
+                    "type": "string"
+                },
+                {
+                    "name": "retired",
+                    "type": "bool"
+                }
+            ]
+        },
+        {
+            "name": "request",
+            "base": "",
+            "fields": [
+                {
+                    "name": "id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "dapp",
+                    "type": "name"
+                },
+                {
+                    "name": "seed",
+                    "type": "checksum256"
+                },
+                {
+                    "name": "ver",
+                    "type": "uint8"
+                },
+                {
+                    "name": "nonce",
+                    "type": "uint64"
+                },
+                {
+                    "name": "assoc_id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "free_call",
+                    "type": "bool"
+                },
+                {
+                    "name": "rnd",
+                    "type": "checksum256"
+                },
+                {
+                    "name": "attempts",
+                    "type": "uint8"
+                },
+                {
+                    "name": "parts",
+                    "type": "part[]"
+                }
+            ]
+        },
+        {
+            "name": "requestrand",
+            "base": "",
+            "fields": [
+                {
+                    "name": "assoc_id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "signing_value",
+                    "type": "uint64"
+                },
+                {
+                    "name": "caller",
+                    "type": "name"
+                }
+            ]
+        },
+        {
+            "name": "resetsuspen",
+            "base": "",
+            "fields": [
+                {
+                    "name": "account",
+                    "type": "name"
+                }
+            ]
+        },
+        {
+            "name": "retirepubkey",
+            "base": "",
+            "fields": [
+                {
+                    "name": "version",
+                    "type": "uint8"
+                }
+            ]
+        },
+        {
+            "name": "retrydeliver",
+            "base": "",
+            "fields": [
+                {
+                    "name": "request_id",
+                    "type": "uint64"
+                }
+            ]
+        },
+        {
+            "name": "setconfig",
+            "base": "",
+            "fields": [
+                {
+                    "name": "config",
+                    "type": "name"
+                },
+                {
+                    "name": "value",
+                    "type": "int64"
+                }
+            ]
+        },
+        {
+            "name": "setoracles",
+            "base": "",
+            "fields": [
+                {
+                    "name": "oracles",
+                    "type": "name[]"
+                }
+            ]
+        },
+        {
+            "name": "setpubkey",
+            "base": "",
+            "fields": [
+                {
+                    "name": "version",
+                    "type": "uint8"
+                },
+                {
+                    "name": "exponent",
+                    "type": "string"
+                },
+                {
+                    "name": "modulus",
+                    "type": "string"
+                }
+            ]
+        },
+        {
+            "name": "setrand",
+            "base": "",
+            "fields": [
+                {
+                    "name": "oracle",
+                    "type": "name"
+                },
+                {
+                    "name": "id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "ver",
+                    "type": "uint8"
+                },
+                {
+                    "name": "sig",
+                    "type": "string"
+                }
+            ]
+        },
+        {
+            "name": "submitpart",
+            "base": "",
+            "fields": [
+                {
+                    "name": "oracle",
+                    "type": "name"
+                },
+                {
+                    "name": "id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "ver",
+                    "type": "uint8"
+                },
+                {
+                    "name": "sig_i",
+                    "type": "string"
+                }
+            ]
+        },
+        {
+            "name": "treasury",
+            "base": "",
+            "fields": [
+                {
+                    "name": "pool_balance",
+                    "type": "uint64"
+                }
+            ]
+        },
+        {
+            "name": "unban",
+            "base": "",
+            "fields": [
+                {
+                    "name": "dapp",
+                    "type": "name"
+                }
+            ]
+        },
+        {
+            "name": "undelivered",
+            "base": "",
+            "fields": [
+                {
+                    "name": "request_id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "dapp",
+                    "type": "name"
+                },
+                {
+                    "name": "assoc_id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "rnd",
+                    "type": "checksum256"
+                },
+                {
+                    "name": "error_message",
+                    "type": "string"
+                },
+                {
+                    "name": "oracle_reward_deadline",
+                    "type": "time_point"
+                }
+            ]
+        },
+        {
+            "name": "unstake",
+            "base": "",
+            "fields": [
+                {
+                    "name": "dapp",
+                    "type": "name"
+                },
+                {
+                    "name": "quantity",
+                    "type": "asset"
+                }
+            ]
+        }
+    ],
+    "actions": [
+        {
+            "name": "ban",
+            "type": "ban",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "claim",
+            "type": "claim",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "cleanup",
+            "type": "cleanup",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "configv2",
+            "type": "configv2",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "getresult",
+            "type": "getresult",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "killjobs",
+            "type": "killjobs",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "markfailed",
+            "type": "markfailed",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "pause",
+            "type": "pause",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "pauserequest",
+            "type": "pauserequest",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "requestrand",
+            "type": "requestrand",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "resetsuspen",
+            "type": "resetsuspen",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "retirepubkey",
+            "type": "retirepubkey",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "retrydeliver",
+            "type": "retrydeliver",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "setconfig",
+            "type": "setconfig",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "setoracles",
+            "type": "setoracles",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "setpubkey",
+            "type": "setpubkey",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "setrand",
+            "type": "setrand",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "submitpart",
+            "type": "submitpart",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "unban",
+            "type": "unban",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "unstake",
+            "type": "unstake",
+            "ricardian_contract": ""
+        }
+    ],
+    "tables": [
+        {
+            "name": "acctstate",
+            "type": "acctstate",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "balances",
+            "type": "balrow",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "banlist.a",
+            "type": "ban_list_a",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "config.a",
+            "type": "config_a",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "dappconfig.a",
+            "type": "config_a",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "oracles.a",
+            "type": "orinfo",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "pubkeys",
+            "type": "pubkey",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "reqs",
+            "type": "request",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "treasury",
+            "type": "treasury",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "undelivered",
+            "type": "undelivered",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        }
+    ],
+    "ricardian_clauses": [],
+    "variants": [],
+    "action_results": []
+}

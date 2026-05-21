@@ -1,0 +1,55 @@
+{
+  "mnemonic": "MNEMONIC",
+  "numberOfAvailablePubkeys": "NUMBER_OF_AVAILABLE_PUBKEYS",
+  "numberOfClearRows": "NUM_OF_CLEAR_ROWS",
+  "logger": {
+    "level": "LOGGER_LEVEL"
+  },
+  "readOnlyMode": "READONLY_MODE",
+  "shareKey": {
+    "threshold": "SHARE_KEY_THRESHOLD",
+    "numParties": "SHARE_KEY_NUM_PARTIES",
+    "bits": "SHARE_KEY_BITS",
+    "shareIndex": "SHARE_KEY_SHARE_INDEX",
+    "publicKey": {
+      "n": "SHARE_KEY_PUBLIC_KEY_N",
+      "e": "SHARE_KEY_PUBLIC_KEY_E"
+    },
+    "sharedKey": "SHARE_KEY_PRIVATE_KEY_HEX",
+    "verificationKey": "SHARE_KEY_VERIFICATION_KEY",
+    "verificationKeyShare": "SHARE_KEY_VERIFICATION_KEY_SHARE",
+    "vku": "SHARE_KEY_VKU"
+  },
+  "metrics": {
+    "host": "METRICS_HOST",
+    "port": "METRICS_PORT",
+    "prefix": "METRICS_PREFIX"
+  },
+  "eos": {
+    "chainId": "EOS_CHAIN_ID",
+    "apiUrl": "EOS_API_URL",
+    "orng": {
+      "nodeOwner": "EOS_ORNG_NODE_OWNER",
+      "contractName": "EOS_ORNG_CONTRACT_NAME",
+      "maxCpu" : "EOS_ORNG_MAX_CPU",
+      "numericScope": "EOS_ORNG_NUMERIC_SCOPE",
+      "privateKey": "EOS_ORNG_PRIVATE_KEY",
+      "auth": "EOS_ORNG_AUTH_PERMISSION"
+    }
+  },
+  "jobRetry": {
+    "maxRetries": "JOB_RETRY_MAX_RETRIES"
+  },
+  "jobPendingAlert": {
+    "maxJobPending": "JOB_PENDING_ALERT_MAX_JOB_PENDING"
+  },
+  "db": {
+    "file": "DB_FILE"
+  },
+  "expressApp": {
+    "enable": "EXPRESS_APP_ENABLE",
+    "port": "EXPRESS_APP_PORT"
+  },
+  "clusterMode": "CLUSTER_MODE",
+  "slackWebhook": "SLACK_WEBHOOK"
+}

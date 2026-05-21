@@ -1,0 +1,15 @@
+{
+  "check-coverage": true,
+  "include": "lib/**",
+  "exclude": [
+    "node_modules/@waxio/rsa-threshold-signatures/**",
+    "node_modules/@waxio/wax-config/**",
+    "packages/**",
+    "test/**",
+    "config/**"
+  ],
+  "branches": 20,
+  "lines": 60,
+  "functions": 50,
+  "statements": 60
+}

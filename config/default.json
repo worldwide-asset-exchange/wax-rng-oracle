@@ -1,0 +1,58 @@
+{
+  "mnemonic": "",
+  "numberOfAvailablePubkeys": 2,
+  "numberOfClearRows": 50,
+  "logger": {
+    "level": "debug"
+  },
+  "readOnlyMode": false,
+  "shareKey": {
+    "threshold": 2,
+    "numParties": 3,
+    "bits": 4096,
+    "shareIndex": 1,
+    "publicKey": {
+      "n": "",
+      "e": ""
+    },
+    "sharedKey": "",
+    "verificationKey": "",
+    "verificationKeyShare": "",
+    "vku": ""
+  },
+  "metrics": {
+    "host": "localhost",
+    "port": 8125,
+    "prefix": "wax-rng-oracle"
+  },
+  "eos": {
+    "chainId": "cf057bbfb72640471fd910bcb67639c22df9f92470936cddc1ade0e2f2e7dc4f",
+    "apiUrl": "http://127.0.0.1:8888",
+    "orng": {
+      "nodeOwner": "orng.wax",
+      "contractName": "orng.wax",
+      "maxCpu" : 100,
+      "numericScope": "11954453851878195200",
+      "privateKey": "",
+      "auth": "active"
+    }
+  },
+  "jobRetry": {
+    "maxRetries": 3
+  },
+  "fetchRetry": {
+    "maxRetries": 5
+  },
+  "jobPendingAlert": {
+    "maxJobPending": 100
+  },
+  "db": {
+    "file": "db.json"
+  },
+  "expressApp": {
+    "enable": true,
+    "port": 3000
+  },
+  "clusterMode": false,
+  "slackWebhook": ""
+}

@@ -1,0 +1,32 @@
+{
+  "mnemonic": "",
+  "shareKey": {
+    "threshold": 2,
+    "numParties": 3,
+    "bits": 4096,
+    "shareIndex": 1,
+    "sharedKey": "",
+    "publicKey": {
+      "n": "",
+      "e": "10001"
+    },
+    "verificationKey": "",
+    "vku": "",
+    "verificationKeyShare": ""
+  },
+  "eos": {
+    "orng": {
+      "nodeOwner": "oracle1",
+      "privateKey": ""
+    }
+  },
+  "expressApp": {
+    "enable": false
+  },
+  "jobRetry": {
+    "maxRetries": 3
+  },
+  "db": {
+    "file": "db1.json"
+  }
+}

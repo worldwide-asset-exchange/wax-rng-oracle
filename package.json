@@ -1,0 +1,74 @@
+{
+  "name": "wax-rng-oracle",
+  "version": "7.1.2",
+  "description": "Random number generator oracle for the WAX network",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "build": "webpack --mode development",
+    "test": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/*.js",
+    "coverage": "LOG_LEVEL=none NODE_ENV=test nyc mocha --exit test/*.js",
+    "start": "npm run build && node index.js",
+    "start-memwatch": "npm run build && node benchmark/memwatch.js",
+    "debug": "npm run build && node --inspect index.js",
+    "prettier": "prettier --single-quote --trailing-comma es5 --write **/*.js",
+    "lint": "prettier --single-quote --trailing-comma es5 --list-different **/*.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/worldwide-asset-exchange/wax-rng-oracle.git"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "dependencies": {
+    "@slack/webhook": "^6.0.0",
+    "@waxio/rsa-threshold-signatures": "^1.2.1",
+    "axios": "^1.4.0",
+    "config": "^3.3.9",
+    "dotenv": "^16.3.1",
+    "eosjs": "^22.1.0",
+    "eosjs-account-name": "^2.2.1",
+    "express": "^4.18.2",
+    "express-validator": "^7.0.1",
+    "hot-shots": "^10.0.0",
+    "int64-buffer": "^1.0.1",
+    "lowdb": "^1.0.0",
+    "node-fetch": "^2.7.0",
+    "prettier": "^1.12.1",
+    "prop-types": "^15.7.2",
+    "react": "15.1.0",
+    "react-dom": "15.1.0",
+    "react-redux": "4.4.5",
+    "react-router": "2.5.0",
+    "util": "^0.12.1",
+    "winston": "3.0.0",
+    "node-forge": "^1.3.1"
+  },
+  "devDependencies": {
+    "babel-cli": "6.23.0",
+    "babel-core": "^6.26.3",
+    "babel-loader": "6.2.4",
+    "babel-preset-es2015": "6.9.0",
+    "babel-preset-react": "6.5.0",
+    "chai": "^4.1.2",
+    "expect": "^1.20.2",
+    "html-webpack-plugin": "^3.2.0",
+    "mocha": "^6.2.0",
+    "mock-req-res": "^1.0.2",
+    "nock": "^13.3.0",
+    "nyc": "^15.1.0",
+    "qtest-js": "^1.0.0",
+    "react-hot-loader": "1.3.0",
+    "sinon": "^15.0.1",
+    "sinon-chai": "^3.3.0",
+    "supertest": "3.1.0",
+    "webpack": "1.13.1",
+    "webpack-hot-middleware": "2.10.0"
+  },
+  "optionalDependencies": {
+    "@waxio/fetch-retry": "1.0.0-beta-1",
+    "@waxio/wax-config": "^1.0.1"
+  },
+  "author": "Worldwide Asset eXchange"
+}

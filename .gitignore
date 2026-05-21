@@ -1,0 +1,32 @@
+node_modules
+.idea
+public/
+.nyc_output
+db.json
+testdb.json
+@waxio
+.env
+benchmark/log
+db*.json
+
+/local_test
+testdb*.json
+
+# Secrets and key material — never commit
+*.pem
+resources/
+.venv/
+
+# Real local node configs (copy from config/local*.example.json) — keep secrets out of git
+config/local1.json
+config/local2.json
+config/local3.json
+
+# Local infra / scratch — not part of the public release
+terraform/
+junk/
+packages/
+*.tgz
+test.js
+test2.js
+rng-test.js

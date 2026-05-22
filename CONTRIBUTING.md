@@ -12,7 +12,7 @@ npm install
 # Build (webpack, development mode)
 npm run build
 
-# Run unit tests (no external dependencies — this is what CI runs)
+# Run unit tests (no external dependencies)
 npm run test:unit
 
 # Run integration tests (require Docker; spin up a WAX chain via qtest-js)
@@ -27,10 +27,11 @@ npm run prettier
 
 The **integration tests** (`test:integration`) start a local WAX chain in
 Docker through [`qtest-js`](https://www.npmjs.com/package/qtest-js), so they
-require a working Docker daemon and are not run in CI. CI runs `npm run
-test:unit` plus `npm run lint`; please make sure both pass before opening a pull
-request. See the [README](README.md) for configuration and local development
-details.
+require a working Docker daemon. CI runs the full suite — `npm run lint`,
+`npm run test:unit`, and `npm run test:integration` — and pre-pulls the qtest
+chain image so the download doesn't count against the test timeout. Please make
+sure all pass before opening a pull request. See the [README](README.md) for
+configuration and local development details.
 
 ## Reporting issues
 

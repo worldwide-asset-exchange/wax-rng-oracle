@@ -22,6 +22,10 @@ config/local1.json
 config/local2.json
 config/local3.json
 
+# Internal-only config — never commit to the public repo (uses public npm + GitHub Actions)
+.npmrc
+.gitlab-ci.yml
+
 # Local infra / scratch — not part of the public release
 terraform/
 junk/

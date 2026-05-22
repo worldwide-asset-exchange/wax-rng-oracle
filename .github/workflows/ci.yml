@@ -17,6 +17,12 @@ jobs:
           node-version: '16'
       - run: npm install
       - run: npm run lint
-      # Integration tests (test:integration) spin up a WAX chain via Docker
-      # (qtest-js) and are run locally — see CONTRIBUTING.md. CI runs unit tests.
       - run: npm run test:unit
+      # Integration tests spin up a WAX chain via qtest-js (Docker). Pre-pull the
+      # chain image (~1.7 GB) in its own step so the download isn't counted
+      # against the tests' mocha timeout on a cold runner — the cause of earlier
+      # CI failures. If anonymous Docker Hub pulls get rate-limited, add a
+      # docker/login-action step using repo secrets before this.
+      - name: Pre-pull qtest chain image
+        run: docker pull songmai108/qtest:v4.0.4
+      - run: npm run test:integration

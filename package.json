@@ -1,6 +1,6 @@
 {
   "name": "wax-rng-oracle",
-  "version": "7.1.2",
+  "version": "7.1.3",
   "description": "Random number generator oracle for the WAX network",
   "main": "index.js",
   "license": "MIT",
@@ -25,7 +25,7 @@
   },
   "dependencies": {
     "@slack/webhook": "^6.0.0",
-    "@waxio/rsa-threshold-signatures": "^1.2.1",
+    "@waxio/rsa-threshold-signatures": "^1.3.0",
     "axios": "^1.4.0",
     "config": "^3.3.9",
     "dotenv": "^16.3.1",

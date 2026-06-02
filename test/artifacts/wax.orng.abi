@@ -313,16 +313,6 @@
             ]
         },
         {
-            "name": "migrateundlv",
-            "base": "",
-            "fields": [
-                {
-                    "name": "batch_size",
-                    "type": "uint64"
-                }
-            ]
-        },
-        {
             "name": "orinfo",
             "base": "",
             "fields": [
@@ -946,11 +936,6 @@
         {
             "name": "markfailed",
             "type": "markfailed",
-            "ricardian_contract": ""
-        },
-        {
-            "name": "migrateundlv",
-            "type": "migrateundlv",
             "ricardian_contract": ""
         },
         {

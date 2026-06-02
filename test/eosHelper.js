@@ -162,6 +162,37 @@ async function setupOrngContract(chain, eosRpc) {
     ]
   );
 
+  // The v3 contract delivers via the randnotify notification by default, which
+  // never throws (so a failing dapp can't surface as an undelivered job). Enable
+  // allowlist enforcement and register the requestrand test contract as a legacy
+  // callback dapp so its reverting receiverand drives the markfailed ->
+  // undelivered1 path. dapp.wax is a bare account (not in the allowlist), so it
+  // stays on the notification path and its deliveries still succeed.
+  await orngContract.contract.action.setconfig(
+    {
+      config: 'allowlist',
+      value: 1,
+    },
+    [
+      {
+        actor: orngContract.name,
+        permission: 'active',
+      },
+    ]
+  );
+
+  await orngContract.contract.action.addlegacy(
+    {
+      dapp: requestRandContract.name,
+    },
+    [
+      {
+        actor: orngContract.name,
+        permission: 'active',
+      },
+    ]
+  );
+
   await treasuryAccount.transfer(
     orngContract.name,
     '1000.00000000 WAX',

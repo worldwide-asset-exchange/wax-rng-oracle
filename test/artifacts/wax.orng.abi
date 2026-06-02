@@ -34,6 +34,50 @@
             ]
         },
         {
+            "name": "adaptiveconfig",
+            "base": "",
+            "fields": [
+                {
+                    "name": "total_capacity_calls_per_hr",
+                    "type": "uint32"
+                },
+                {
+                    "name": "free_min_calls_per_hr",
+                    "type": "uint32"
+                },
+                {
+                    "name": "headroom_calls_per_hr",
+                    "type": "uint32"
+                },
+                {
+                    "name": "per_dapp_min_calls_per_hr",
+                    "type": "uint32"
+                },
+                {
+                    "name": "burst_window_hours",
+                    "type": "uint32"
+                },
+                {
+                    "name": "ema_half_life_sec",
+                    "type": "uint32"
+                },
+                {
+                    "name": "ema_min_update_sec",
+                    "type": "uint32"
+                }
+            ]
+        },
+        {
+            "name": "addlegacy",
+            "base": "",
+            "fields": [
+                {
+                    "name": "dapp",
+                    "type": "name"
+                }
+            ]
+        },
+        {
             "name": "balrow",
             "base": "",
             "fields": [
@@ -78,6 +122,20 @@
             ]
         },
         {
+            "name": "claimfund",
+            "base": "",
+            "fields": [
+                {
+                    "name": "user",
+                    "type": "name"
+                },
+                {
+                    "name": "dapp",
+                    "type": "name"
+                }
+            ]
+        },
+        {
             "name": "cleanup",
             "base": "",
             "fields": [
@@ -106,6 +164,40 @@
             ]
         },
         {
+            "name": "configadptive",
+            "base": "",
+            "fields": [
+                {
+                    "name": "total_capacity_calls_per_hr",
+                    "type": "uint32"
+                },
+                {
+                    "name": "free_min_calls_per_hr",
+                    "type": "uint32"
+                },
+                {
+                    "name": "headroom_calls_per_hr",
+                    "type": "uint32"
+                },
+                {
+                    "name": "per_dapp_min_calls_per_hr",
+                    "type": "uint32"
+                },
+                {
+                    "name": "burst_window_hours",
+                    "type": "uint32"
+                },
+                {
+                    "name": "ema_half_life_sec",
+                    "type": "uint32"
+                },
+                {
+                    "name": "ema_min_update_sec",
+                    "type": "uint32"
+                }
+            ]
+        },
+        {
             "name": "configv2",
             "base": "",
             "fields": [
@@ -116,13 +208,34 @@
                 {
                     "name": "strike_max",
                     "type": "uint8"
+                }
+            ]
+        },
+        {
+            "name": "configv3",
+            "base": "",
+            "fields": [
+                {
+                    "name": "stipendmonth",
+                    "type": "uint64"
                 },
                 {
-                    "name": "k_calls_per_wax",
-                    "type": "uint8"
-                },
+                    "name": "minclaimint",
+                    "type": "uint64"
+                }
+            ]
+        },
+        {
+            "name": "disablecoll",
+            "base": "",
+            "fields": []
+        },
+        {
+            "name": "enablecoll",
+            "base": "",
+            "fields": [
                 {
-                    "name": "treas_hardfloor",
+                    "name": "duration_seconds",
                     "type": "uint64"
                 }
             ]
@@ -148,6 +261,28 @@
                 {
                     "name": "job_ids",
                     "type": "uint64[]"
+                }
+            ]
+        },
+        {
+            "name": "legacycallback",
+            "base": "",
+            "fields": [
+                {
+                    "name": "dapp",
+                    "type": "name"
+                },
+                {
+                    "name": "code_hash",
+                    "type": "checksum256"
+                },
+                {
+                    "name": "added_time",
+                    "type": "time_point_sec"
+                },
+                {
+                    "name": "auto_collected",
+                    "type": "bool"
                 }
             ]
         },
@@ -178,6 +313,16 @@
             ]
         },
         {
+            "name": "migrateundlv",
+            "base": "",
+            "fields": [
+                {
+                    "name": "batch_size",
+                    "type": "uint64"
+                }
+            ]
+        },
+        {
             "name": "orinfo",
             "base": "",
             "fields": [
@@ -196,6 +341,32 @@
                 {
                     "name": "suspended",
                     "type": "bool"
+                }
+            ]
+        },
+        {
+            "name": "ostipend",
+            "base": "",
+            "fields": [
+                {
+                    "name": "oracle",
+                    "type": "name"
+                },
+                {
+                    "name": "active",
+                    "type": "bool"
+                },
+                {
+                    "name": "last_claim",
+                    "type": "time_point"
+                },
+                {
+                    "name": "last_accrue",
+                    "type": "time_point"
+                },
+                {
+                    "name": "usd_accrued",
+                    "type": "uint64"
                 }
             ]
         },
@@ -256,6 +427,28 @@
                 {
                     "name": "retired",
                     "type": "bool"
+                }
+            ]
+        },
+        {
+            "name": "randnotify",
+            "base": "",
+            "fields": [
+                {
+                    "name": "request_id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "dapp",
+                    "type": "name"
+                },
+                {
+                    "name": "assoc_id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "rnd",
+                    "type": "checksum256"
                 }
             ]
         },
@@ -324,6 +517,11 @@
             ]
         },
         {
+            "name": "resetcoll",
+            "base": "",
+            "fields": []
+        },
+        {
             "name": "resetsuspen",
             "base": "",
             "fields": [
@@ -350,6 +548,34 @@
                 {
                     "name": "request_id",
                     "type": "uint64"
+                }
+            ]
+        },
+        {
+            "name": "rmlegacy",
+            "base": "",
+            "fields": [
+                {
+                    "name": "dapp",
+                    "type": "name"
+                }
+            ]
+        },
+        {
+            "name": "rngstats",
+            "base": "",
+            "fields": [
+                {
+                    "name": "paid_rate_ema_ch",
+                    "type": "float64"
+                },
+                {
+                    "name": "paid_count_window",
+                    "type": "uint64"
+                },
+                {
+                    "name": "last_ema_update",
+                    "type": "time_point_sec"
                 }
             ]
         },
@@ -418,6 +644,50 @@
             ]
         },
         {
+            "name": "setstipend",
+            "base": "",
+            "fields": [
+                {
+                    "name": "oracle",
+                    "type": "name"
+                },
+                {
+                    "name": "active",
+                    "type": "bool"
+                }
+            ]
+        },
+        {
+            "name": "signvals_a",
+            "base": "",
+            "fields": [
+                {
+                    "name": "signing_value",
+                    "type": "uint64"
+                }
+            ]
+        },
+        {
+            "name": "skiplegacy",
+            "base": "",
+            "fields": [
+                {
+                    "name": "dapp",
+                    "type": "name"
+                }
+            ]
+        },
+        {
+            "name": "stakestats",
+            "base": "",
+            "fields": [
+                {
+                    "name": "total_stake_amount",
+                    "type": "int64"
+                }
+            ]
+        },
+        {
             "name": "submitpart",
             "base": "",
             "fields": [
@@ -436,6 +706,16 @@
                 {
                     "name": "sig_i",
                     "type": "string"
+                }
+            ]
+        },
+        {
+            "name": "toggleallow",
+            "base": "",
+            "fields": [
+                {
+                    "name": "enabled",
+                    "type": "bool"
                 }
             ]
         },
@@ -486,13 +766,69 @@
                 {
                     "name": "oracle_reward_deadline",
                     "type": "time_point"
+                },
+                {
+                    "name": "free_call",
+                    "type": "bool"
                 }
             ]
         },
         {
-            "name": "unstake",
+            "name": "undelivered_old",
             "base": "",
             "fields": [
+                {
+                    "name": "request_id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "dapp",
+                    "type": "name"
+                },
+                {
+                    "name": "assoc_id",
+                    "type": "uint64"
+                },
+                {
+                    "name": "rnd",
+                    "type": "checksum256"
+                },
+                {
+                    "name": "error_message",
+                    "type": "string"
+                },
+                {
+                    "name": "oracle_reward_deadline",
+                    "type": "time_point"
+                }
+            ]
+        },
+        {
+            "name": "unstakeentry",
+            "base": "",
+            "fields": [
+                {
+                    "name": "user",
+                    "type": "name"
+                },
+                {
+                    "name": "amount",
+                    "type": "asset"
+                },
+                {
+                    "name": "request_time",
+                    "type": "time_point_sec"
+                }
+            ]
+        },
+        {
+            "name": "unstakeuser",
+            "base": "",
+            "fields": [
+                {
+                    "name": "user",
+                    "type": "name"
+                },
                 {
                     "name": "dapp",
                     "type": "name"
@@ -502,9 +838,56 @@
                     "type": "asset"
                 }
             ]
+        },
+        {
+            "name": "updatelegacy",
+            "base": "",
+            "fields": [
+                {
+                    "name": "dapp",
+                    "type": "name"
+                },
+                {
+                    "name": "new_code_hash",
+                    "type": "checksum256"
+                }
+            ]
+        },
+        {
+            "name": "userstake",
+            "base": "",
+            "fields": [
+                {
+                    "name": "user",
+                    "type": "name"
+                },
+                {
+                    "name": "amount",
+                    "type": "asset"
+                },
+                {
+                    "name": "last_update",
+                    "type": "time_point_sec"
+                }
+            ]
+        },
+        {
+            "name": "verifyhash",
+            "base": "",
+            "fields": [
+                {
+                    "name": "dapp",
+                    "type": "name"
+                }
+            ]
         }
     ],
     "actions": [
+        {
+            "name": "addlegacy",
+            "type": "addlegacy",
+            "ricardian_contract": ""
+        },
         {
             "name": "ban",
             "type": "ban",
@@ -516,13 +899,38 @@
             "ricardian_contract": ""
         },
         {
+            "name": "claimfund",
+            "type": "claimfund",
+            "ricardian_contract": ""
+        },
+        {
             "name": "cleanup",
             "type": "cleanup",
             "ricardian_contract": ""
         },
         {
+            "name": "configadptive",
+            "type": "configadptive",
+            "ricardian_contract": ""
+        },
+        {
             "name": "configv2",
             "type": "configv2",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "configv3",
+            "type": "configv3",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "disablecoll",
+            "type": "disablecoll",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "enablecoll",
+            "type": "enablecoll",
             "ricardian_contract": ""
         },
         {
@@ -541,6 +949,11 @@
             "ricardian_contract": ""
         },
         {
+            "name": "migrateundlv",
+            "type": "migrateundlv",
+            "ricardian_contract": ""
+        },
+        {
             "name": "pause",
             "type": "pause",
             "ricardian_contract": ""
@@ -551,8 +964,18 @@
             "ricardian_contract": ""
         },
         {
+            "name": "randnotify",
+            "type": "randnotify",
+            "ricardian_contract": ""
+        },
+        {
             "name": "requestrand",
             "type": "requestrand",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "resetcoll",
+            "type": "resetcoll",
             "ricardian_contract": ""
         },
         {
@@ -568,6 +991,11 @@
         {
             "name": "retrydeliver",
             "type": "retrydeliver",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "rmlegacy",
+            "type": "rmlegacy",
             "ricardian_contract": ""
         },
         {
@@ -591,8 +1019,23 @@
             "ricardian_contract": ""
         },
         {
+            "name": "setstipend",
+            "type": "setstipend",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "skiplegacy",
+            "type": "skiplegacy",
+            "ricardian_contract": ""
+        },
+        {
             "name": "submitpart",
             "type": "submitpart",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "toggleallow",
+            "type": "toggleallow",
             "ricardian_contract": ""
         },
         {
@@ -601,8 +1044,18 @@
             "ricardian_contract": ""
         },
         {
-            "name": "unstake",
-            "type": "unstake",
+            "name": "unstakeuser",
+            "type": "unstakeuser",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "updatelegacy",
+            "type": "updatelegacy",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "verifyhash",
+            "type": "verifyhash",
             "ricardian_contract": ""
         }
     ],
@@ -610,6 +1063,13 @@
         {
             "name": "acctstate",
             "type": "acctstate",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "adaptcfg",
+            "type": "adaptiveconfig",
             "index_type": "i64",
             "key_names": [],
             "key_types": []
@@ -636,8 +1096,8 @@
             "key_types": []
         },
         {
-            "name": "dappconfig.a",
-            "type": "config_a",
+            "name": "legacycb",
+            "type": "legacycallback",
             "index_type": "i64",
             "key_names": [],
             "key_types": []
@@ -645,6 +1105,13 @@
         {
             "name": "oracles.a",
             "type": "orinfo",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "ostip.a",
+            "type": "ostipend",
             "index_type": "i64",
             "key_names": [],
             "key_types": []
@@ -664,6 +1131,27 @@
             "key_types": []
         },
         {
+            "name": "rngstats",
+            "type": "rngstats",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "signvals.a",
+            "type": "signvals_a",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "stakestats",
+            "type": "stakestats",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
             "name": "treasury",
             "type": "treasury",
             "index_type": "i64",
@@ -672,7 +1160,28 @@
         },
         {
             "name": "undelivered",
+            "type": "undelivered_old",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "undelivered1",
             "type": "undelivered",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "unstake",
+            "type": "unstakeentry",
+            "index_type": "i64",
+            "key_names": [],
+            "key_types": []
+        },
+        {
+            "name": "userstakes",
+            "type": "userstake",
             "index_type": "i64",
             "key_names": [],
             "key_types": []

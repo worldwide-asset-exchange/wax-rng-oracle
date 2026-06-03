@@ -121,8 +121,26 @@ async function setupOrngContract(chain, eosRpc) {
     {
       fee_per_call: '0.00500000 WAX',
       strike_max: 3,
-      k_calls_per_wax: 10,
-      treas_hardfloor: 10,
+    },
+    [
+      {
+        actor: orngContract.name,
+        permission: 'active',
+      },
+    ]
+  );
+
+  // Adaptive rate-limiting config is required by the v3.x contract before
+  // requests can be served. Values mirror wax-orng's own test suite.
+  await orngContract.contract.action.configadptive(
+    {
+      total_capacity_calls_per_hr: 20000,
+      free_min_calls_per_hr: 1000,
+      headroom_calls_per_hr: 2000,
+      per_dapp_min_calls_per_hr: 15,
+      burst_window_hours: 150,
+      ema_half_life_sec: 1200,
+      ema_min_update_sec: 15,
     },
     [
       {
@@ -144,16 +162,51 @@ async function setupOrngContract(chain, eosRpc) {
     ]
   );
 
+  // The v3 contract delivers via the randnotify notification by default, which
+  // never throws (so a failing dapp can't surface as an undelivered job). Enable
+  // allowlist enforcement and register the requestrand test contract as a legacy
+  // callback dapp so its reverting receiverand drives the markfailed ->
+  // undelivered1 path. dapp.wax is a bare account (not in the allowlist), so it
+  // stays on the notification path and its deliveries still succeed.
+  await orngContract.contract.action.setconfig(
+    {
+      config: 'allowlist',
+      value: 1,
+    },
+    [
+      {
+        actor: orngContract.name,
+        permission: 'active',
+      },
+    ]
+  );
+
+  await orngContract.contract.action.addlegacy(
+    {
+      dapp: requestRandContract.name,
+    },
+    [
+      {
+        actor: orngContract.name,
+        permission: 'active',
+      },
+    ]
+  );
+
   await treasuryAccount.transfer(
     orngContract.name,
     '1000.00000000 WAX',
     'treasury'
   );
-  await dappContract.transfer(orngContract.name, '100.00000000 WAX', 'deposit');
+  await dappContract.transfer(
+    orngContract.name,
+    '100.00000000 WAX',
+    'deposit-' + dappContract.name
+  );
   await requestRandContract.transfer(
     orngContract.name,
     '100.00000000 WAX',
-    'deposit'
+    'deposit-' + requestRandContract.name
   );
 
   return {

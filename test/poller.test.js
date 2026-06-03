@@ -260,12 +260,44 @@ describe('test rng oracle poller', async () => {
       expect(jobs_tbl_after.rows.length).to.equal(0);
 
       const undeliveredJobs = await orngContract.contract.table[
-        'undelivered'
+        'undelivered1'
       ].get({
         scope: orngContract.name,
       });
 
       expect(undeliveredJobs.rows.length).to.equal(1);
+    });
+
+    // Regression coverage for WBP-1953: the oracle must read the renamed
+    // on-chain table ("undelivered1"). Before the fix it queried "undelivered"
+    // (now the empty undelivered_old table), so retry delivery silently found
+    // nothing. This drives the actual retry path end-to-end.
+    it('should read undelivered1 and drive retry delivery (WBP-1953)', async function() {
+      this.timeout(180000);
+
+      // The failed request from the previous test is recorded on-chain.
+      const onChain = await orngContract.contract.table['undelivered1'].get({
+        scope: orngContract.name,
+      });
+      expect(onChain.rows.length).to.equal(1);
+      const requestId = onChain.rows[0].request_id;
+
+      // The oracle's query path must surface that row. With the wrong table
+      // name this returns [] and the assertion below fails.
+      const jobsToRetry = await jobService1.getJobsToRetryDeliver();
+      expect(jobsToRetry.length).to.equal(1);
+      expect(String(jobsToRetry[0].request_id)).to.equal(String(requestId));
+
+      // Drive the full poller retry loop; stub the on-chain push so the test
+      // asserts the oracle attempts redelivery for the job it read.
+      const retryStub = sinon
+        .stub(rngPusher, 'retryDeliver')
+        .resolves({ transactionId: 'stub', tx: {} });
+
+      await poller1.pollJobToRetryDeliver();
+
+      expect(retryStub.calledOnce).to.equal(true);
+      expect(String(retryStub.firstCall.args[1])).to.equal(String(requestId));
     });
 
     it('should call contract cleanup', async function() {

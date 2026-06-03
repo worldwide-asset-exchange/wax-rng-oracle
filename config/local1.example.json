@@ -1,5 +1,4 @@
 {
-  "mnemonic": "",
   "shareKey": {
     "threshold": 2,
     "numParties": 3,

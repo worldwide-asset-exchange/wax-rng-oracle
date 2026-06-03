@@ -77,7 +77,6 @@ cleos wallet import --private-key 5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79z
 ## Configuration
 
 Key environment variables:
-- `MNEMONIC` - Mnemonic for generating signing keys
 - `EOS_API_URL` - WAX chain API endpoint
 - `EOS_ORNG_NODE_OWNER` - Block producer account name
 - `EOS_ORNG_PRIVATE_KEY` - Private key for pushing RNG actions

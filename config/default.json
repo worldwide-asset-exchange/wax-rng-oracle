@@ -1,7 +1,4 @@
 {
-  "mnemonic": "",
-  "numberOfAvailablePubkeys": 2,
-  "numberOfClearRows": 50,
   "logger": {
     "level": "debug"
   },
@@ -32,7 +29,6 @@
       "nodeOwner": "orng.wax",
       "contractName": "orng.wax",
       "maxCpu" : 100,
-      "numericScope": "11954453851878195200",
       "privateKey": "",
       "auth": "active"
     }

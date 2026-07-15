@@ -54,7 +54,6 @@ $ cp config/local3.example.json config/local3.json
 
 For each node, set:
 
-- `mnemonic` — seed used to derive the node's signing key
 - `eos.orng.privateKey` — private key for that node's `oracleN` account
 - `shareKey` — this node's RSA threshold share: `shareIndex`, `sharedKey`,
   `publicKey.n`, `publicKey.e`, `verificationKey`, `verificationKeyShare`, `vku`
@@ -245,9 +244,6 @@ WAX internal deployments can optionally use `@waxio/wax-config` for secrets mana
 
 Default configuration is set in [config/default.json](./config/default.json). You can override settings using environment-specific config files or environment variables:
 
-- `MNEMONIC`: mnemonic to generate signing key of node
-- `NUMBER_OF_AVAILABLE_PUBKEYS`: number of available signing public key of node that updated in RNG smart contract, must be greater than 2.
-- `NUM_OF_CLEAR_ROWS`: number of rows to clean signed value
 - `READONLY_MODE`: run express app only
 - `METRICS_HOST`, `METRICS_PORT`, `METRICS_PREFIX`: metrics config
 - `EOS_CHAIN_ID`: wax chain id
@@ -266,6 +262,36 @@ Default configuration is set in [config/default.json](./config/default.json). Yo
 
 ```bash
 $ npm start
+```
+
+#### Secrets management (WAX internal deployments)
+
+When `@waxio/wax-config` is installed, the config loader can resolve sensitive
+values from AWS Secrets Manager instead of reading them from plain config/env.
+Auth uses the ambient IAM role (ECS task role / instance profile), so no AWS
+credentials are stored. This is opt-in via these environment variables — when
+they are unset (e.g. open-source deployments), behaviour is unchanged and config
+values are read as-is:
+
+- `SECRETS_MANAGER_SECRET_ID`: id/ARN of the Secrets Manager secret holding this
+  node's secret bundle (a JSON object keyed by the config paths below).
+- `DECRYPTION_ENVIRONMENTS`: comma-separated `NODE_ENV` values in which secrets
+  are resolved (e.g. `production`), or `*` for all. Outside these, values pass
+  through untouched so local dev needs no AWS access.
+- `ENCRYPTED_KEYS`: comma-separated config paths to pull from the secret bundle.
+  Canonical value for this service:
+  `shareKey.sharedKey,eos.orng.privateKey,shareKey.verificationKeyShare,shareKey.vku`
+
+The Secrets Manager secret must be a JSON object whose keys match `ENCRYPTED_KEYS`
+(flat dotted keys or nested JSON both work), for example:
+
+```json
+{
+  "shareKey.sharedKey": "...",
+  "eos.orng.privateKey": "...",
+  "shareKey.verificationKeyShare": "...",
+  "shareKey.vku": "..."
+}
 ```
 
 ### Stats metrics

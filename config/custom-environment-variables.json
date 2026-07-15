@@ -1,7 +1,4 @@
 {
-  "mnemonic": "MNEMONIC",
-  "numberOfAvailablePubkeys": "NUMBER_OF_AVAILABLE_PUBKEYS",
-  "numberOfClearRows": "NUM_OF_CLEAR_ROWS",
   "logger": {
     "level": "LOGGER_LEVEL"
   },
@@ -32,7 +29,6 @@
       "nodeOwner": "EOS_ORNG_NODE_OWNER",
       "contractName": "EOS_ORNG_CONTRACT_NAME",
       "maxCpu" : "EOS_ORNG_MAX_CPU",
-      "numericScope": "EOS_ORNG_NUMERIC_SCOPE",
       "privateKey": "EOS_ORNG_PRIVATE_KEY",
       "auth": "EOS_ORNG_AUTH_PERMISSION"
     }
@@ -51,5 +47,12 @@
     "port": "EXPRESS_APP_PORT"
   },
   "clusterMode": "CLUSTER_MODE",
-  "slackWebhook": "SLACK_WEBHOOK"
+  "slackWebhook": "SLACK_WEBHOOK",
+  "encrypted_keys": "ENCRYPTED_KEYS",
+  "secretsManager": {
+    "secretId": "SECRETS_MANAGER_SECRET_ID"
+  },
+  "decryption": {
+    "environments": "DECRYPTION_ENVIRONMENTS"
+  }
 }

@@ -7,7 +7,7 @@
   "scripts": {
     "build": "webpack --mode development",
     "test": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/*.js",
-    "test:unit": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/eos-header.test.js test/get-health-check-api.test.js test/get-version.test.js test/shuffle.test.js",
+    "test:unit": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/eos-header.test.js test/get-health-check-api.test.js test/get-version.test.js test/shuffle.test.js test/is-true.test.js",
     "test:integration": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/get-jobs-api.test.js test/jobService.test.js test/jobService.collision.test.js test/poller.test.js",
     "coverage": "LOG_LEVEL=none NODE_ENV=test nyc mocha --exit test/*.js",
     "start": "npm run build && node index.js",

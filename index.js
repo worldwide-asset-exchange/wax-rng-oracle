@@ -50,7 +50,7 @@ async function run() {
   }
   const poller = new Poller(config.get('eos.orng.nodeOwner'), shareKeyService, rngPusher, jobService, config.get('shareKey.shareIndex'));
 
-  if (config.get('clusterMode') && cluster.isPrimary) {
+  if (isTrue(config.get('clusterMode')) && cluster.isPrimary) {
     logger.info(`Application: Master ${process.pid} is running`);
     const dbMap = {};
 
@@ -78,7 +78,7 @@ async function run() {
       expressApp.startApp(port);
     }
 
-    if(!config.readOnlyMode) {
+    if (!isTrue(config.get('readOnlyMode'))) {
       poll(poller.clearResolvedFailures, 20000)();
       poll(poller.clearResolvedDeliveryFailures, 20000)();
       poll(poller.pollJobsToSetPart, 300)();
@@ -86,6 +86,8 @@ async function run() {
       poll(poller.pollJobToRetryDeliver, 5000)();
       poll(poller.monitorPendingJob, 10000)();
       poll(poller.cleanupDelivered, 1 * 24 * 60 * 60 * 1000)(); // once a day
+    } else {
+      logger.warn('READONLY_MODE active — poller disabled; serving API only, no jobs will be signed.');
     }
     logger.info(`Application: Worker ${process.pid} started`);
 

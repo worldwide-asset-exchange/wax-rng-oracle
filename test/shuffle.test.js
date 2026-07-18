@@ -1,4 +1,5 @@
 const { expect } = require('chai');
+const sinon = require('sinon');
 const {
   shuffleArray,
   generateDailySeed,
@@ -190,6 +191,24 @@ describe('Shuffle Utility Tests', () => {
   });
 
   describe('Collision reduction simulation', () => {
+    // These simulations assert that DIFFERENT seeds give different first picks —
+    // but first picks land in a 20-slot space, so some real dates collide (e.g.
+    // day 20651: oracles 2 and 3 both pick job 4) and the suite would fail all
+    // day. Pin the clock (Date only — mocha still needs real timers) to a date
+    // verified collision-free so the assertions are deterministic forever.
+    let clock;
+
+    before(() => {
+      clock = sinon.useFakeTimers({
+        now: Date.parse('2026-01-01T12:00:00Z'),
+        toFake: ['Date'],
+      });
+    });
+
+    after(() => {
+      clock.restore();
+    });
+
     it('should demonstrate different oracles get different job orders', () => {
       const jobs = [];
       for (let i = 1; i <= 20; i++) {
@@ -239,6 +258,42 @@ describe('Shuffle Utility Tests', () => {
         JSON.stringify(oracle2Top5) === JSON.stringify(oracle3Top5);
 
       expect(allSame).to.be.false;
+    });
+
+    it('keeps seed entropy across a 30-day sweep, not just the pinned day', () => {
+      // The pinned clock above makes the single-day assertions deterministic, but
+      // on its own it would let a seed-entropy regression ship if it happened to
+      // stay collision-free on that one day. Sweep 30 consecutive (fake) days:
+      // full orders must always differ (seeds are always distinct), and first-pick
+      // collisions must stay rare (baseline: 3 of these 30 days; ~14.5% expected
+      // for 3 picks in a 20-slot space — a collapse pushes this toward every day).
+      const jobs = [];
+      for (let i = 1; i <= 20; i++) {
+        jobs.push({ id: i });
+      }
+
+      const dayMs = 86400000;
+      const start = Date.parse('2026-01-01T12:00:00Z');
+      let firstPickCollisionDays = 0;
+
+      for (let d = 0; d < 30; d++) {
+        clock.setSystemTime(start + d * dayMs);
+        const orders = [1, 2, 3].map(k =>
+          shuffleArray(jobs, generateDailySeed(k)).map(j => j.id)
+        );
+
+        for (let a = 0; a < orders.length; a++) {
+          for (let b = a + 1; b < orders.length; b++) {
+            expect(orders[a]).to.not.deep.equal(orders[b]);
+          }
+        }
+
+        const firsts = new Set(orders.map(o => o[0]));
+        if (firsts.size < orders.length) firstPickCollisionDays++;
+      }
+
+      clock.setSystemTime(start); // restore the pinned day for later tests
+      expect(firstPickCollisionDays).to.be.at.most(10);
     });
 
     it('should demonstrate cluster mode workers get different job orders', () => {

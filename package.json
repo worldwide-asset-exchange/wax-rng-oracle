@@ -70,7 +70,7 @@
   },
   "optionalDependencies": {
     "@waxio/fetch-retry": "1.0.0-beta-1",
-    "@waxio/wax-config": "^2.0.0"
+    "@waxio/wax-config": "^2.1.0"
   },
   "author": "Worldwide Asset eXchange"
 }

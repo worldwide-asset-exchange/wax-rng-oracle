@@ -234,7 +234,7 @@ Total time for process  1000  jobs  61414
 DONE
 ```
 
-## Safety checks (since 6.1.0)
+## Safety checks (since 7.2.0)
 
 - **Boot share self-check.** Before signing anything the member reads the `orng.wax` `pubkeys` row
   for the active key version (`config.a` → `activever`) and verifies its own share against it with
@@ -260,10 +260,11 @@ DONE
 
 ## Versioning
 
-`package.json` `version` is the next release tag without the `v` (one scheme since 6.1.0; before
-that the package said 7.1.x while images were tagged v5.x–v6.0.0). The GitLab release gate accepts
-only a single increment over the highest existing `v*` tag. Bump the version in the same change that
-earns it and record it in `CHANGELOG.md`; `/version` echoes it.
+`package.json` `version` follows the GitHub repository's release tags (unprefixed, e.g. `7.1.4` →
+`7.2.0`); bump it in the same change that earns it, record it in `CHANGELOG.md`, and `/version`
+echoes it. The GitLab lane that builds the production image tags `vX.Y.Z` on its own `main` (single
+increment over the highest existing `v*` tag, `v6.0.0` → `v6.1.0`); that tag identifies a build,
+not the app version.
 
 ## Run the application
 

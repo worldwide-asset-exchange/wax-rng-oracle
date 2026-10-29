@@ -1,21 +1,21 @@
 # Changelog
 
 All notable changes to `wax-rng-oracle` (the `orng.wax` 2-of-3 threshold member process) are
-documented here. Release tags are `vX.Y.Z` on GitLab (`monica.thh.io:wax/wax-rng-oracle`); the tag
-builds the production image and pins it by digest into the three member values files.
+documented here. Releases are tags on GitHub (`worldwide-asset-exchange/wax-rng-oracle`, unprefixed
+`X.Y.Z`); the production image is built by the GitLab lane (`monica.thh.io:wax/wax-rng-oracle`,
+v-prefixed tag on its `main`) and pinned by digest into the three member values files.
 
-## Version scheme (decided in WBP-2067)
+## Version scheme (decided in WBP-2067, corrected 2026-10-29)
 
-Up to v6.0.0 the package version (7.1.x) and the release tag (v5.x → v6.0.0) were two unrelated
-sequences, so `/version` reported `7.1.4` from an image tagged `v6.0.0`. From 6.1.0 there is **one
-scheme**: `package.json` `version` **is** the next release tag (without the `v`), bumped in the same
-change that earns it, and the GitLab release gate's single-increment rule (`vPREV+1.0.0`,
-`vP.MI+1.0` or `vP.MI.PA+1` over the highest existing `v*` tag) decides what that next tag may be.
-Realigning downwards (7.1.4 → 6.1.0) was chosen over jumping the tag line to v7.2.0 because the
-tags are what the release gate, the ECR images and the values files all reference; the package line
-was only ever cosmetic.
+The application version follows the **GitHub repository** (`worldwide-asset-exchange/wax-rng-oracle`):
+`package.json` `version` is the next GitHub release tag (unprefixed, like `7.1.4`), bumped in the same
+change that earns it; `/version` echoes it. The **GitLab lane** (`monica.thh.io:wax/wax-rng-oracle`)
+only builds the production image: its release gate requires a v-prefixed single-increment tag on its
+`main` (`v6.0.0` shipped the current image), and that tag is a build identifier, **not** the app
+version. The two sequences differ on purpose; the image digest written into the values files is the
+real identity of what deploys. Next GitLab build tag for this release: `v6.1.0`.
 
-## 6.1.0 — unreleased
+## 7.2.0 — unreleased
 
 Security-hardening release of the member process, adopting `@waxio/rsa-threshold-signatures` 2.0.0
 and closing the oracle-side findings of the 2026-10 RNG review (ORC-1, ORC-3, ORC-9; SIG-4/5/13 on
@@ -122,7 +122,8 @@ the chain unchanged. Ticket: WBP-2067 (epic WBP-2063).
 
 ### Version
 
-- `package.json` `7.1.4` → `6.1.0` (see *Version scheme* above). `/version` reports `6.1.0`.
+- `package.json` `7.1.4` → `7.2.0` (see *Version scheme* above). `/version` reports `7.2.0`.
+  GitLab build-lane tag for this release: `v6.1.0`.
 
 ## 6.0.0 — 2026-08-30
 

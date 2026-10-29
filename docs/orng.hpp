@@ -26,13 +26,16 @@
 #include <eosio/time.hpp>
 #include <eosio/crypto.hpp>
 #include <eosio/multi_index.hpp>
+#include <eosio/binary_extension.hpp>
 #include <stdint.h>
 #include <string>
 #include <vector>
+#include <delphioracle-interface.hpp>
 
 
 const eosio::symbol WAX = eosio::symbol("WAX", 8);
-const eosio::name GOV = eosio::name("orng.wax");
+
+const     uint64_t  BASE_PRECISION = 10000; // 10^4 for price calculations
 
 const     uint8_t   REQ_PENDING = 0;
 const     uint8_t   REQ_SENT = 1;
@@ -64,6 +67,19 @@ static eosio::checksum256 make_msg(eosio::checksum256 seed, eosio::name d, uint6
         buf.push_back((n >> (i * 8)) & 0xff);
     // std::string msg = to_hex(buf.data(), buf.size());
     return eosio::sha256(buf.data(), buf.size());
+}
+
+// eosio.token `accounts` row, read with scope = orng.wax to learn the WAX the account holds (reconcile).
+// Kept outside the contract class on purpose: a multi_index alias declared inside it makes abigen emit an
+// `accounts` table for orng.wax without the row struct, and that dangling type made nodeos reject the whole
+// ABI (invalid_type_inside_abi) when the first build was deployed on 2026-10-27.
+namespace tokenview {
+    struct token_account
+    {
+        eosio::asset balance;
+        uint64_t primary_key() const { return balance.symbol.code().raw(); }
+    };
+    using token_accounts_type = eosio::multi_index<"accounts"_n, token_account>;
 }
 
 CONTRACT orng : public eosio::contract
@@ -118,13 +134,20 @@ public:
      */
     [[eosio::action]] void unban(const eosio::name &dapp);
 
-    // v2 actions
     /**
-     * Unstake previously staked WAX tokens
-     * @param dapp Account name unstaking tokens
+     * Unstake user's individual stake from a dapp
+     * @param user User account unstaking tokens
+     * @param dapp Dapp account user staked for
      * @param quantity Amount of WAX to unstake
      */
-    [[eosio::action]] void unstake(const eosio::name &dapp, const eosio::asset &quantity);
+    [[eosio::action]] void unstakeuser(const eosio::name &user, const eosio::name &dapp, const eosio::asset &quantity);
+
+    /**
+     * Claim unstaked funds after unstake time delay
+     * @param user User account claiming tokens
+     * @param dapp Dapp account user unstaked from
+     */
+    [[eosio::action]] void claimfund(const eosio::name &user, const eosio::name &dapp);
 
     /**
      * Set public key for signing
@@ -156,9 +179,52 @@ public:
      * Set configuration for v2
      * @param fee_per_call Amount of WAX to stake
      * @param strike_max Strike max
-     * @param k_calls_per_wax K calls per WAX
      */
-    [[eosio::action]] void configv2(const eosio::asset &fee_per_call, uint8_t strike_max, uint8_t k_calls_per_wax, uint64_t treas_hardfloor);
+    [[eosio::action]] void configv2(const eosio::asset &fee_per_call, uint8_t strike_max);
+
+    /**
+     * Set configuration for v3 (stipend system)
+     * @param stipendmonth Monthly stipend in BASE_PRECISION (10^4) format
+     * @param minclaimint Minimum claim interval in seconds
+     */
+    [[eosio::action]] void configv3(uint64_t stipendmonth, uint64_t minclaimint);
+
+    /**
+     * Set oracle stipend active status
+     * @param oracle Oracle account name
+     * @param active Whether oracle can accrue stipend
+     */
+    [[eosio::action]] void setstipend(const eosio::name &oracle, bool active);
+
+    /**
+     * Reconcile the treasury counter with the WAX this account actually holds for the treasury.
+     *
+     * `treasury.pool_balance` only moves on a `treasury` deposit (up) and a stipend claim (down),
+     * so any other outflow leaves it overstated. The system contract reads this counter to size
+     * its RNG deposits (deposit = min(carve-out, max_pool_rng - pool_balance)), so an overstated
+     * counter blocks funding, and `claim` would pay stipends against a balance that is not there.
+     *
+     * Sets pool_balance = eosio.token balance of this account
+     *                   - dApp stakes            (sum of acctstate.stake, checked against stakestats)
+     *                   - pending unstakes       (every `unstake` scope; unstakeuser requires an acctstate
+     *                                             row and acctstate rows are never erased, so the
+     *                                             acctstate dapps enumerate every scope)
+     *                   - dApp fee deposits      (sum of acctstate.fee_balance)
+     *                   - oracle unpaid fees     (sum of balances.unpaid)
+     *                   - in-flight fees         (fee_per_call per paid row in reqs, fee_per_call/2 per
+     *                                             paid row in undelivered1 inside its reward deadline)
+     * Refuses if stakestats disagrees with the acctstate stakes (a second broken counter is not
+     * baked into the treasury) and if the liabilities exceed the balance (insolvency is not papered
+     * over). Idempotent: running it on an honest counter rewrites the same value. The integer
+     * remainder of fee splits (`_reward_oracles`: qty / oracle_count) is the only WAX this formula
+     * attributes to the treasury that was not deposited as such - dust of under one oracle share
+     * per paid request.
+     *
+     * Deploying this build changes the code hash, which the system contract checks before every
+     * deposit: `eosio::addornghash(<new hash>)` must execute before `setcode`, or the carve-out
+     * stays off (wax-system-contracts docs/04_guides/14_runbook-allowlisted-contract-upgrade.md).
+     */
+    [[eosio::action]] void reconcile();
 
     /**
      * Claim WAX from the treasury
@@ -218,6 +284,92 @@ public:
      * @param batch_size Maximum number of entries to process in this call
      */
     [[eosio::action]] void cleanup(eosio::name oracle, uint64_t batch_size);
+
+    /**
+     * Toggle allowlist enforcement on/off
+     * @param enabled True to enable allowlist enforcement, false to use dual delivery for all
+     */
+    [[eosio::action]] void toggleallow(bool enabled);
+
+    /**
+     * Enable collection mode to auto-capture legacy dapps
+     * @param duration_seconds Duration in seconds for collection mode
+     */
+    [[eosio::action]] void enablecoll(uint64_t duration_seconds);
+
+    /**
+     * Disable collection mode
+     */
+    [[eosio::action]] void disablecoll();
+
+    /**
+     * Reset (clear) all auto-collected legacy callback entries
+     */
+    [[eosio::action]] void resetcoll();
+
+    /**
+     * Add a dapp to legacy callback list with code hash verification
+     * @param dapp Dapp account to add
+     */
+    [[eosio::action]] void addlegacy(const eosio::name &dapp);
+
+    /**
+     * Remove a dapp from legacy callback list
+     * @param dapp Dapp account to remove
+     */
+    [[eosio::action]] void rmlegacy(const eosio::name &dapp);
+
+    /**
+     * Skip legacy callback delivery for this dapp (opt into notification pattern)
+     * Adds dapp to allowlist with impossible hash, forcing notification delivery
+     * Use this if your dApp only implements notification handler, not legacy receiverand
+     * @param dapp Dapp account to opt into notification pattern
+     */
+    [[eosio::action]] void skiplegacy(const eosio::name &dapp);
+
+    /**
+     * Update code hash for a legacy dapp (exceptional cases only)
+     * @param dapp Dapp account to update
+     * @param new_code_hash New code hash to set
+     */
+    [[eosio::action]] void updatelegacy(const eosio::name &dapp, const eosio::checksum256 &new_code_hash);
+
+    /**
+     * Verify and potentially remove a dapp if code hash changed
+     * @param dapp Dapp account to verify
+     */
+    [[eosio::action]] void verifyhash(const eosio::name &dapp);
+
+    /**
+     * Notification action for delivering random values via require_recipient
+     * This is the new delivery method that doesn't require RAM allocation by dapps
+     * @param request_id Internal request ID
+     * @param dapp Dapp account to notify
+     * @param assoc_id User-provided association ID
+     * @param rnd The random value
+     */
+    [[eosio::action]] void randnotify(uint64_t request_id, eosio::name dapp, uint64_t assoc_id, const eosio::checksum256 &rnd);
+
+    /**
+     * Configure adaptive staking parameters
+     * @param total_capacity_calls_per_hr Total system capacity (calls/hour)
+     * @param free_min_calls_per_hr Minimum free tier capacity (calls/hour)
+     * @param headroom_calls_per_hr Reserve capacity for bursts (calls/hour)
+     * @param per_dapp_min_calls_per_hr Minimum capacity per dApp (calls/hour)
+     * @param burst_window_hours Burst window (scaled by 100, e.g. 100 = 1.0 hours)
+     * @param ema_half_life_sec EMA half-life in seconds
+     * @param ema_min_update_sec Minimum EMA update interval in seconds
+     */
+    [[eosio::action]] void configadptive(
+        uint32_t total_capacity_calls_per_hr,
+        uint32_t free_min_calls_per_hr,
+        uint32_t headroom_calls_per_hr,
+        uint32_t per_dapp_min_calls_per_hr,
+        uint32_t burst_window_hours,
+        uint32_t ema_half_life_sec,
+        uint32_t ema_min_update_sec
+    );
+
 private:
     TABLE config_a
     {
@@ -227,7 +379,6 @@ private:
         uint64_t primary_key() const { return name; }
     };
     using config_table_type = eosio::multi_index<"config.a"_n, config_a>;
-    using dappconfig_table_type = eosio::multi_index<"dappconfig.a"_n, config_a>;
 
     TABLE ban_list_a
     {
@@ -236,6 +387,17 @@ private:
         uint64_t primary_key() const { return dapp.value; }
     };
     using ban_list_table_type = eosio::multi_index<"banlist.a"_n, ban_list_a>;
+
+    TABLE legacycallback
+    {
+        eosio::name dapp;
+        eosio::checksum256 code_hash;
+        eosio::time_point_sec added_time;
+        bool auto_collected = false;
+
+        uint64_t primary_key() const { return dapp.value; }
+    };
+    using legacycallback_table_type = eosio::multi_index<"legacycb"_n, legacycallback>;
 
 
     // v2 tables
@@ -263,6 +425,17 @@ private:
     };
     using oracles_table_type = eosio::multi_index<"oracles.a"_n, orinfo>;
 
+    struct [[eosio::table]] ostipend
+    {
+        eosio::name oracle;
+        bool active = true;
+        eosio::time_point last_claim;
+        eosio::time_point last_accrue;
+        uint64_t usd_accrued = 0;  // USD in BASE_PRECISION (10^4)
+        uint64_t primary_key() const { return oracle.value; }
+    };
+    using ostip_table_type = eosio::multi_index<"ostip.a"_n, ostipend>;
+
     struct [[eosio::table]] acctstate
     {
         eosio::name dapp;
@@ -270,16 +443,65 @@ private:
         uint32_t credits = 0;
         eosio::asset fee_balance{0, WAX};
         uint64_t last_nonce = 0;
-        eosio::time_point_sec last_update;
+        eosio::time_point_sec last_update;  // time of the last refill
+        // v3.4.0: the fraction of a credit carried between refills, in nanocredits (1e-9 credit),
+        // 0 <= credits_nano < 1e9. A binary extension so rows written before v3.4.0 (no field)
+        // still deserialize: they read as absent (= 0) and _refill writes the field on its first
+        // pass. Must stay the last field (binary extensions are only valid at the end of a struct).
+        eosio::binary_extension<uint32_t> credits_nano;
         uint64_t primary_key() const { return dapp.value; }
     };
     using acct_table_type = eosio::multi_index<"acctstate"_n, acctstate>;
+
+    struct [[eosio::table]] userstake
+    {
+        eosio::name user;
+        eosio::asset amount{0, WAX};
+        eosio::time_point_sec last_update;
+        uint64_t primary_key() const { return user.value; }
+    };
+    using userstakes_table_type = eosio::multi_index<"userstakes"_n, userstake>;
+
+    struct [[eosio::table]] unstakeentry
+    {
+        eosio::name user;
+        eosio::asset amount{0, WAX};
+        eosio::time_point_sec request_time;
+        uint64_t primary_key() const { return user.value; }
+    };
+    using unstake_table_type = eosio::multi_index<"unstake"_n, unstakeentry>;
 
     struct [[eosio::table]] treasury
     {
         uint64_t pool_balance = 0;
     };
     using treas_singleton_type = eosio::singleton<"treasury"_n, treasury>;
+
+    struct [[eosio::table]] stakestats
+    {
+        int64_t total_stake_amount = 0;
+    };
+    using stakestats_singleton_type = eosio::singleton<"stakestats"_n, stakestats>;
+
+    struct [[eosio::table]] rngstats
+    {
+        double paid_rate_ema_ch = 0.0;
+        uint64_t paid_count_window = 0;
+        eosio::time_point_sec last_ema_update = eosio::time_point_sec(eosio::current_time_point());
+    };
+    using rngstats_singleton_type = eosio::singleton<"rngstats"_n, rngstats>;
+
+    struct [[eosio::table]] adaptiveconfig
+    {
+        uint32_t total_capacity_calls_per_hr = 18000;      // calls/hour
+        uint32_t free_min_calls_per_hr = 900;              // calls/hour
+        uint32_t headroom_calls_per_hr = 1800;             // calls/hour
+        uint32_t per_dapp_min_calls_per_hr = 10;           // calls/hour
+        uint32_t burst_window_hours = 100;                 // scaled by 100: 100 = 1.0 hours
+        uint32_t ema_half_life_sec = 900;                  // seconds
+        uint32_t ema_min_update_sec = 10;                  // seconds
+    };
+    using adaptiveconfig_singleton_type = eosio::singleton<"adaptcfg"_n, adaptiveconfig>;
 
     struct [[eosio::table]] balrow
     {
@@ -288,8 +510,8 @@ private:
         uint64_t primary_key() const { return oracle.value; }
     };
     using bal_table_type = eosio::multi_index<"balances"_n, balrow>;
-
-    struct [[eosio::table]] undelivered
+    
+    struct [[eosio::table]] undelivered_old
     {
         uint64_t request_id;
         eosio::name dapp;
@@ -300,7 +522,24 @@ private:
         uint64_t primary_key() const { return request_id; }
         uint128_t by_dapp_assoc() const { return (uint128_t{dapp.value} << 64) | assoc_id; }
     };
-    using undelivered_table_type = eosio::multi_index<"undelivered"_n, undelivered,
+
+    using undelivered_table_type_old = eosio::multi_index<"undelivered"_n, undelivered_old,
+        eosio::indexed_by<"bydappassoc"_n, eosio::const_mem_fun<undelivered_old, uint128_t, &undelivered_old::by_dapp_assoc>>>;
+
+
+    struct [[eosio::table]] undelivered
+    {
+        uint64_t request_id;
+        eosio::name dapp;
+        uint64_t assoc_id;
+        eosio::checksum256 rnd;
+        std::string error_message;
+        eosio::time_point oracle_reward_deadline;  // deadline for oracle to claim remaining 50%
+        bool free_call = false;
+        uint64_t primary_key() const { return request_id; }
+        uint128_t by_dapp_assoc() const { return (uint128_t{dapp.value} << 64) | assoc_id; }
+    };
+    using undelivered_table_type = eosio::multi_index<"undelivered1"_n, undelivered,
         eosio::indexed_by<"bydappassoc"_n, eosio::const_mem_fun<undelivered, uint128_t, &undelivered::by_dapp_assoc>>>;
 
     struct part
@@ -325,12 +564,32 @@ private:
     };
     using req_table_type = eosio::multi_index<"reqs"_n, request>;
 
+    /**
+     * DEPRECATED and included for backwards compatibility
+     * V1 table for storing the signing values used in randomness requests
+     * Why is this still needed?
+     *  Because some old contracts used internal structures to operate unusual logic. See:
+     *  https://github.com/pinknetworkx/atomicpacks-contract/blob/master/src/atomicpacks.cpp#L55
+     *  https://github.com/pinknetworkx/atomicpacks-contract/blob/master/src/unboxing.cpp#L219
+     */
+    struct [[eosio::table]] signvals_a
+    {
+        uint64_t signing_value;
+
+        uint64_t primary_key() const { return signing_value; }
+    };
+    using signvals_table_type = eosio::multi_index<"signvals.a"_n, signvals_a>;
+
     config_table_type config_table;
     ban_list_table_type ban_list_table;
+    legacycallback_table_type legacycallback_table;
     pkey_table_type pkey_table;
     oracles_table_type oracles_table;
     acct_table_type acct_table;
     treas_singleton_type treas_singleton;
+    stakestats_singleton_type stakestats_singleton;
+    rngstats_singleton_type rngstats_singleton;
+    adaptiveconfig_singleton_type adaptiveconfig_singleton;
     // bal_table_type bal_table;
     req_table_type req_table;
 
@@ -344,9 +603,11 @@ private:
     uint64_t hash_to_int(const eosio::checksum256 &value);
 
     void _refill(acct_table_type::const_iterator it);
+    void _update_paid_ema(bool was_paid);
+    double _current_free_capacity_calls_per_hr();
     void _reward_oracles(eosio::asset qty);
-    void _stake(const eosio::name &dapp, const eosio::asset &quantity);
-    void _deposit(const eosio::name &dapp, const eosio::asset &quantity);
+    void _stake(const eosio::name &staker, const eosio::name &dapp, const eosio::asset &quantity);
+    void _deposit(const eosio::name &depositor, const eosio::name &dapp, const eosio::asset &quantity);
     void _treasury_deposit(const eosio::asset &quantity);
     
     // Returns computed randomness if validation succeeds, empty checksum256 if oracle should get strike
@@ -354,7 +615,27 @@ private:
     
     // Clean up expired undelivered results (helper function)
     void _cleanup_expired_results(uint64_t batch_size);
-    
-    
+
+    // Deliver random value using appropriate method(s) based on allowlist configuration
+    // Returns true if legacy callback was attempted
+    bool _deliver_random(eosio::name dapp, uint64_t assoc_id, const eosio::checksum256& rnd);
+
+    // Check if dapp can use legacy callback based on code hash verification
+    bool can_use_legacy_callback(eosio::name dapp);
+    // Fetch WAX/USD price from Delphioracle (returns WAX price with BASE_PRECISION = 10^4)
+    uint64_t _fetch_wax_usd_price();
+
+    // Convert USD micro-cents to WAX asset (floor to 4 decimal places)
+    eosio::asset _usd_to_wax(uint64_t usd, uint64_t wax_price);
+
+    // Convert WAX asset to USD micro-cents (exact integer micro-USD)
+    uint64_t _wax_to_usd(const asset& wax, uint64_t wax_price);
+
+    // Initialize stipend entry for an oracle
+    void _init_stipend(eosio::name oracle, bool active);
+
+    // Accrue stipend for an oracle up to the given time point
+    uint64_t _accrue_stipend(eosio::name oracle, eosio::time_point now);
+
 
 }; // CONTRACT orng

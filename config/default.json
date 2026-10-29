@@ -42,6 +42,10 @@
   "jobPendingAlert": {
     "maxJobPending": 100
   },
+  "bootCheck": {
+    "rpcRetries": 6,
+    "rpcRetryBaseMs": 2000
+  },
   "db": {
     "file": "db.json"
   },

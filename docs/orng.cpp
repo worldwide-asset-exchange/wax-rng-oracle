@@ -27,6 +27,8 @@
 #include <eosio/print.hpp>
 #include <eosio/transaction.hpp>
 
+#include <cmath>
+#include <limits>
 #include <tuple>
 
 using namespace eosio;
@@ -41,13 +43,45 @@ static constexpr uint64_t free_max_jobs                         = "freemaxjobs"_
 // v2 config
 static constexpr uint64_t fee_per_call_index                    = "feepercall"_n.value;  // fee per random number request
 static constexpr uint64_t strikes_max_index                     = "strikesmax"_n.value;  // maximum number of strikes before oracle suspension
-static constexpr uint64_t k_calls_per_wax_index                 = "kcallsperwax"_n.value; // number of calls allowed per WAX staked
+static constexpr uint64_t k_calls_per_wax_denominator           = 10000; // fixed denominator for fractional rate support
 static constexpr uint64_t active_ver_index                      = "activever"_n.value;   // active version of the public key
-static constexpr uint64_t treas_hardfloor_multiplier_index      = "treasfloor"_n.value;  // multiplier for the treasury balance
 static constexpr uint64_t callback_retries_index                = "callbackret"_n.value; // number of callback retries (default 2)
 static constexpr uint64_t oracle_reward_deadline_index          = "oraclereward"_n.value; // oracle reward deadline in seconds (default 7 days)
+static constexpr uint64_t unstake_time_index                    = "unstaketime"_n.value;  // unstake time delay in seconds (default 72 hours)
+static constexpr uint64_t allowlist_enabled_index               = "allowlist"_n.value;  // allowlist enabled flag (default 0 = disabled)
+static constexpr uint64_t collection_enabled_index              = "collecten"_n.value;    // collection mode enabled flag (default 0 = disabled)
+static constexpr uint64_t collection_start_index                = "collectst"_n.value;    // collection mode start timestamp
+static constexpr uint64_t collection_end_index                  = "collectend"_n.value;   // collection mode end timestamp
+// v3 config - stipend system
+static constexpr uint64_t stipendmonth_index                    = "stipendmonth"_n.value; // monthly stipend in BASE_PRECISION (10^4) format
+static constexpr uint64_t minclaimint_index                     = "minclaimint"_n.value;  // minimum claim interval in seconds
 
 const name v1_ram_account                                       = "oraclev1.wax"_n;
+static constexpr uint64_t WAX_PRECISION_POW                     = 100000000; // 10^8
+
+// The random value delivered to a dApp is sha256 over the submitted signature *string*, while
+// verify_rsa_sha256_sig parses that string as a hex integer (case-insensitive) and reduces it
+// modulo n, so one signature has other spellings that verify: upper/mixed case, and s + n at the
+// same width (whenever s < 16^width - n). The whole std::string is handed to the verifier, which
+// itself rejects any width other than the modulus'; the charset check is what excludes NUL and
+// other junk bytes. Only the one canonical spelling is accepted - lower-case hex, exactly the
+// width of the key modulus, numerically below it - so that one valid signature maps to exactly
+// one rnd. Full (setrand/markfailed) signatures only: partial signatures (submitpart) are not
+// padded and are never hashed.
+static bool is_lower_hex(const std::string& s) {
+    for (char c : s) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
+static void check_canonical_signature(const std::string& sig, const std::string& modulus) {
+    check(sig.size() == modulus.size(),
+          "signature must be a hex string with the same length as the key modulus (fixed width, no truncation or padding)");
+    check(is_lower_hex(sig), "signature must contain only lower-case hex characters [0-9a-f]");
+    // same width and charset, so string order is numeric order; s + n would verify as well
+    check(sig < modulus, "signature must be numerically less than the key modulus");
+}
 
 orng::orng(const name& receiver,
            const name& code,
@@ -55,21 +89,25 @@ orng::orng(const name& receiver,
     : contract(receiver, code, ds)
     , config_table(receiver, receiver.value)
     , ban_list_table(receiver, receiver.value)
-    , pkey_table(receiver, receiver.value) 
+    , legacycallback_table(receiver, receiver.value)
+    , pkey_table(receiver, receiver.value)
     , oracles_table(receiver, receiver.value)
     , treas_singleton(receiver, receiver.value)
+    , stakestats_singleton(receiver, receiver.value)
+    , rngstats_singleton(receiver, receiver.value)
+    , adaptiveconfig_singleton(receiver, receiver.value)
     , req_table(receiver, receiver.value)
     , acct_table(receiver, receiver.value)
     {
 }
 
 ACTION orng::pause(bool paused) {
-    require_auth({get_self(), "pause"_n});
+    require_auth(get_self());
     set_config(paused_index, uint64_t(paused));
 }
 
 ACTION orng::pauserequest(bool paused) {
-    require_auth({get_self(), "pause"_n});
+    require_auth(get_self());
     set_config(paused_request_row, uint64_t(paused));
 }
 
@@ -89,78 +127,277 @@ void orng::receive_token_transfer(eosio::name from, eosio::name to, eosio::asset
   check(get_first_receiver() == name("eosio.token"), "only support eosio.token");
   check(quantity.symbol == WAX, "only support WAXP token");
 
-  if (memo == "stake") {
-    _stake(from, quantity);
-  } else if (memo == "deposit") {
-    _deposit(from, quantity);
-  } else if (memo == "treasury") {
+  if (memo == "treasury") {
     _treasury_deposit(quantity);
+  } else if (memo.substr(0, 6) == "stake-") {
+    check(memo.length() > 6, "invalid memo format: stake-<dapp_name>");
+    string dapp_name = memo.substr(6);
+    check(dapp_name.length() > 0 && dapp_name.length() <= 12, "invalid dapp name length");
+    eosio::name dapp = eosio::name(dapp_name);
+    check( is_account( dapp ), "dapp account does not exist");
+    _stake(from, dapp, quantity);
+  } else if (memo.substr(0, 8) == "deposit-") {
+    check(memo.length() > 8, "invalid memo format: deposit-<dapp_name>");
+    string dapp_name = memo.substr(8);
+    check(dapp_name.length() > 0 && dapp_name.length() <= 12, "invalid dapp name length");
+    eosio::name dapp = eosio::name(dapp_name);
+    check( is_account( dapp ), "dapp account does not exist");
+    _deposit(from, dapp, quantity);
   } else {
-    check(false, "only support staking or deposit");
+    check(false, "only support stake-<dapp>, deposit-<dapp>, or treasury");
   }
 }
 
-void orng::_refill(acct_table_type::const_iterator it){
-    auto k_calls_per_wax = get_config(k_calls_per_wax_index, 3);
-    uint64_t maxc = it->stake.amount * k_calls_per_wax / pow(10, WAX.precision());
-    uint64_t  dt = (current_time_point().sec_since_epoch() - it->last_update.sec_since_epoch());
-    uint64_t add = dt * maxc / 3600;
-    acct_table.modify(it, same_payer, [&](auto& r) {
-        r.credits = std::min(r.credits + add, maxc);
-        r.last_update = time_point_sec(current_time_point());
+void orng::_update_paid_ema(bool was_paid) {
+    auto st = rngstats_singleton.get_or_default(rngstats{});
+    auto cfg = adaptiveconfig_singleton.get_or_default(adaptiveconfig{});
+
+    const auto now = current_time_point();
+    auto last = st.last_ema_update.sec_since_epoch() ? st.last_ema_update : time_point_sec(now);
+
+    uint32_t dt = std::max(1u, (uint32_t)(now.sec_since_epoch() - last.sec_since_epoch()));
+    st.paid_count_window += was_paid ? 1 : 0;
+
+    if (dt >= cfg.ema_min_update_sec) {
+        double tau = (double)cfg.ema_half_life_sec / std::log(2.0);
+        double g = std::exp(-(double)dt / std::max(1.0, tau));
+        double inst_rate = (st.paid_count_window * 3600.0) / (double)dt;
+        st.paid_rate_ema_ch = g * st.paid_rate_ema_ch + (1.0 - g) * inst_rate;
+
+        st.paid_count_window = 0;
+        st.last_ema_update = time_point_sec(now);
+    }
+    rngstats_singleton.set(st, get_self());
+}
+
+double orng::_current_free_capacity_calls_per_hr() {
+    auto cfg = adaptiveconfig_singleton.get_or_default(adaptiveconfig{});
+    auto st = rngstats_singleton.get_or_default(rngstats{});
+
+    double total_capacity = (double)cfg.total_capacity_calls_per_hr;
+    double headroom = (double)cfg.headroom_calls_per_hr;
+    double free_min = (double)cfg.free_min_calls_per_hr;
+    double paid_ema = std::max(0.0, st.paid_rate_ema_ch);
+
+    double T_free = total_capacity - headroom - paid_ema;
+    return std::max(free_min, T_free);
+}
+
+void orng::_refill(acct_table_type::const_iterator it) {
+    auto cfg = adaptiveconfig_singleton.get_or_default(adaptiveconfig{});
+    auto ss = stakestats_singleton.get_or_default(stakestats{});
+
+    double S_total = (double)ss.total_stake_amount;
+    double s_dapp = (double)it->stake.amount;
+
+    // per_dapp_min_calls_per_hr is unscaled (10 = 10 calls/hr); only burst_window_hours is x100
+    double per_dapp_min = (double)cfg.per_dapp_min_calls_per_hr;
+
+    // Calculate rate_dapp using adaptive formula
+    double T_free = _current_free_capacity_calls_per_hr();
+    double rate_dapp = per_dapp_min;
+    if (S_total > 0.0) {
+        rate_dapp = std::max(per_dapp_min, T_free * (s_dapp / S_total));
+    }
+
+    // burst_window_hours is scaled by 100 (100 = 1.0)
+    double burst_window_hours = (double)cfg.burst_window_hours / 100.0;
+    double burst_dapp = burst_window_hours * rate_dapp;
+
+    // Refill in fixed point. The credit entitlement for the elapsed time is added, in nanocredits
+    // (1e-9 credit), to the fraction carried from the previous refill; whole credits move into
+    // `credits` and the fraction stays in `credits_nano`, so `last_update` is simply the time of
+    // the last refill. Any account can trigger _refill for any dApp through a `stake-<dapp>`
+    // transfer, so flooring the fraction away on every call (v3.3.0) let a third party hold a
+    // dApp's free tier at zero. Properties (authoritative description; CLAUDE.md and
+    // docs/STAKING-MECHANICS.md summarise it):
+    //  - the accrual is integer arithmetic on a rate floored once to nanocredits per hour, so a
+    //    refill under-credits by less than 1e-9 credit (a credit that is a few nanocredits short
+    //    lands on the next refill) and can never over-credit, however often the row is refilled,
+    //    including by the dApp itself;
+    //  - the fraction is stored in credits, not time, so a change of rate_dapp between refills
+    //    (stake, S_total, free capacity) neither gains nor loses it;
+    //  - at the burst cap the state is clamped to exactly burst_dapp (whole part in `credits`,
+    //    fractional part in `credits_nano`); nothing above the cap is banked, and the cap still
+    //    applies when rate_dapp falls because S_total grew.
+    // The row is rewritten with the contract as payer: the field grows pre-v3.4.0 rows by four
+    // bytes, and a row paid by the dApp could not grow inside the transfer notification.
+    static constexpr uint64_t k_nano = 1000000000;  // nanocredits per credit
+    static constexpr uint64_t k_u32_max = std::numeric_limits<uint32_t>::max();
+    uint32_t now_sec = time_point_sec(current_time_point()).sec_since_epoch();
+    uint32_t last_sec = it->last_update.sec_since_epoch();
+    uint64_t dt = now_sec > last_sec ? (uint64_t)(now_sec - last_sec) : 0;  // also covers last_update == 0
+
+    // credits saturate at uint32 max, so the rate and the cap are clamped there (keeps every cast defined)
+    double rate_capped = std::min(std::max(rate_dapp, 0.0), (double)k_u32_max);
+    double burst_capped = std::min(std::max(burst_dapp, 0.0), (double)k_u32_max);
+    uint64_t rate_nano = (uint64_t)std::floor(rate_capped * (double)k_nano);  // <= 4.3e18 < 2^63
+    unsigned __int128 accrued_wide = (unsigned __int128)rate_nano * dt / 3600;  // exact floor, < 2^95
+    const unsigned __int128 k_accrued_max = (unsigned __int128)k_u32_max * k_nano;
+    uint64_t accrued_nano = accrued_wide > k_accrued_max ? (uint64_t)k_accrued_max : (uint64_t)accrued_wide;
+    uint64_t carried = it->credits_nano.has_value() ? it->credits_nano.value() : 0;  // pre-v3.4.0 rows: none
+    uint64_t nano = carried + accrued_nano;  // < 2^32 + 4.3e18 < 2^64
+    uint64_t credits = (uint64_t)it->credits + nano / k_nano;
+    uint32_t fraction = (uint32_t)(nano % k_nano);
+    if ((double)credits + (double)fraction / (double)k_nano >= burst_capped) {
+        double cap_whole = std::floor(burst_capped);
+        credits = (uint64_t)cap_whole;
+        fraction = (uint32_t)std::floor((burst_capped - cap_whole) * (double)k_nano);
+        if (fraction >= k_nano) fraction = (uint32_t)(k_nano - 1);  // floating-point guard; frac < 1
+    }
+    if (credits > k_u32_max) credits = (uint64_t)k_u32_max;
+    acct_table.modify(it, get_self(), [&](auto& r) {
+        r.credits = (uint32_t)credits;
+        r.last_update = time_point_sec(now_sec);
+        r.credits_nano.emplace(fraction);
     });
 }
 
-/* stake / unstake / deposit */
-void orng::_stake(const eosio::name &dapp, const eosio::asset &quantity){
+void orng::_stake(const eosio::name &staker, const eosio::name &dapp, const eosio::asset &quantity){
     eosio::check(!is_paused(), "paused");
     check(quantity.symbol == WAX && quantity.amount > 0, "invalid quantity");
+
+    // Auto-create acctstate entry if it doesn't exist
     auto it = acct_table.find(dapp.value);
-    auto amount = quantity.amount;
-    if(it == acct_table.end()) 
-        acct_table.emplace(_self, [&](auto&r){
+    if (it == acct_table.end()) {
+        auto cfg = adaptiveconfig_singleton.get_or_default(adaptiveconfig{});
+        uint32_t init_free_call = (cfg.per_dapp_min_calls_per_hr * cfg.burst_window_hours) / 100;
+        acct_table.emplace(get_self(), [&](auto& r) {
             r.dapp = dapp;
-            r.stake = quantity;
+            r.stake = asset{0, WAX};
+            r.fee_balance = asset{0, WAX};
+            r.credits = init_free_call;
+            r.last_update = time_point_sec(current_time_point());
+            r.last_nonce = 0;
+        });
+        it = acct_table.find(dapp.value);
+    }
+    _refill(it);
+    acct_table.modify(it, same_payer, [&](auto&r){
+        r.stake += quantity;
+    });
+
+    // Update global total stake
+    auto ss = stakestats_singleton.get_or_default(stakestats{});
+    ss.total_stake_amount += quantity.amount;
+    stakestats_singleton.set(ss, get_self());
+
+    // Auto-create userstakes entry if it doesn't exist
+    userstakes_table_type userstakes_table(get_self(), dapp.value);
+    auto user_it = userstakes_table.find(staker.value);
+    if (user_it == userstakes_table.end()) {
+        userstakes_table.emplace(get_self(), [&](auto& r) {
+            r.user = staker;
+            r.amount = quantity;
             r.last_update = time_point_sec(current_time_point());
         });
-    else{ 
-        _refill(it); 
-        acct_table.modify(it, get_self(), [&](auto&r){
-            r.stake += quantity;
-        }); 
+    } else {
+        userstakes_table.modify(user_it, same_payer, [&](auto& r) {
+            r.amount += quantity;
+            r.last_update = time_point_sec(current_time_point());
+        });
     }
 }
-void orng::unstake(const eosio::name& dapp, const eosio::asset& quantity) {
+
+void orng::unstakeuser(const eosio::name& user, const eosio::name& dapp, const eosio::asset& quantity) {
     eosio::check(!is_paused(), "paused");
-    require_auth(dapp);
-    
-    auto it = acct_table.require_find(dapp.value, "no stake found");
+    require_auth(user);
+    check(quantity.symbol == WAX && quantity.amount > 0, "invalid quantity");
+
+    // Check and update userstakes table
+    userstakes_table_type userstakes_table(get_self(), dapp.value);
+    auto user_it = userstakes_table.require_find(user.value, "no user stake found for this dapp");
+    check(user_it->amount >= quantity, "exceed user staked amount");
+
+    // Update user stakes table - reduce staked amount immediately
+    if (user_it->amount == quantity) {
+        userstakes_table.erase(user_it);
+    } else {
+        userstakes_table.modify(user_it, same_payer, [&](auto& r) {
+            r.amount -= quantity;
+            r.last_update = time_point_sec(current_time_point());
+        });
+    }
+
+    // Update acctstate table (total dapp stake) - reduce immediately
+    auto it = acct_table.require_find(dapp.value, "no dapp stake found");
     _refill(it);
-    check(it->stake >= quantity, "exceed amount");
-    
+    check(it->stake >= quantity, "exceed total dapp stake amount");
+
     acct_table.modify(it, same_payer, [&](auto& r) { r.stake -= quantity; });
-    
+
+    // Update global total stake
+    auto ss = stakestats_singleton.get_or_default(stakestats{});
+    check(ss.total_stake_amount >= quantity.amount, "global stake underflow");
+    ss.total_stake_amount -= quantity.amount;
+    stakestats_singleton.set(ss, get_self());
+
+    // Create or update unstake request
+    unstake_table_type unstake_table(get_self(), dapp.value);
+    auto unstake_it = unstake_table.find(user.value);
+    if (unstake_it == unstake_table.end()) {
+        // Create new unstake request
+        unstake_table.emplace(user, [&](auto& r) {
+            r.user = user;
+            r.amount = quantity;
+            r.request_time = time_point_sec(current_time_point());
+        });
+    } else {
+        // Update existing request - add amount and reset time
+        unstake_table.modify(unstake_it, same_payer, [&](auto& r) {
+            r.amount += quantity;
+            r.request_time = time_point_sec(current_time_point());
+        });
+    }
+}
+
+void orng::claimfund(const eosio::name& user, const eosio::name& dapp) {
+    eosio::check(!is_paused(), "paused");
+    require_auth(user);
+
+    // Get unstake request
+    unstake_table_type unstake_table(get_self(), dapp.value);
+    auto unstake_it = unstake_table.require_find(user.value, "no unstake request found for this dapp");
+
+    // Check if unstake time has passed
+    uint64_t unstake_time = get_config(unstake_time_index, 259200); // default 72 hours = 259200 seconds
+    uint64_t time_since_request = current_time_point().sec_since_epoch() - unstake_it->request_time.sec_since_epoch();
+    check(time_since_request >= unstake_time, "unstake time not reached, please wait");
+
+    // Get the full amount to claim
+    eosio::asset claim_amount = unstake_it->amount;
+
+    // Remove unstake request
+    unstake_table.erase(unstake_it);
+
+    // Transfer tokens back to user
     action{{get_self(), "active"_n},
             "eosio.token"_n,
             "transfer"_n,
-            std::make_tuple(get_self(), dapp, quantity, string("unstake"))}
+            std::make_tuple(get_self(), user, claim_amount, string("claim unstaked from " + dapp.to_string()))}
         .send();
 }
 
-void orng::_deposit(const eosio::name& dapp, const eosio::asset& quantity) {
+void orng::_deposit(const eosio::name& depositor, const eosio::name& dapp, const eosio::asset& quantity) {
     eosio::check(!is_paused(), "paused");
-    require_auth(dapp);
     check(quantity.symbol == WAX && quantity.amount > 0, "invalid quantity");
+
+    // Auto-create acctstate entry if it doesn't exist
     auto it = acct_table.find(dapp.value);
-    if (it == acct_table.end())
+    if (it == acct_table.end()) {
+        auto cfg = adaptiveconfig_singleton.get_or_default(adaptiveconfig{});
+        uint32_t init_free_call = (cfg.per_dapp_min_calls_per_hr * cfg.burst_window_hours) / 100;
         acct_table.emplace(get_self(), [&](auto& r) {
-        r.dapp = dapp;
-        r.fee_balance = quantity;
-        r.last_update = time_point_sec(current_time_point());
+            r.dapp = dapp;
+            r.stake = asset{0, WAX};
+            r.fee_balance = quantity;  // Start with the deposited amount
+            r.credits = init_free_call;
+            r.last_update = time_point_sec(current_time_point());
+            r.last_nonce = 0;
         });
-    else{
-        acct_table.modify(it, get_self(), [&](auto& r) { 
-            r.fee_balance += quantity; 
+    } else {
+        acct_table.modify(it, same_payer, [&](auto& r) {
+            r.fee_balance += quantity;
         });
     }
 }
@@ -186,43 +423,163 @@ void orng::_reward_oracles(asset qty) {
     if (itr == oracles_table.end()) return;
     int64_t oracle_count = 0;
     for (auto it = oracles_table.begin(); it != oracles_table.end(); ++it) {
-        oracle_count++;
+        if (!it->suspended) {
+            oracle_count++;
+        }
     }
     if (oracle_count > 0){
         asset each{qty.amount / oracle_count, WAX};
         bal_table_type bt(get_self(), get_self().value);
-        for (auto& o : oracles_table) {
-            auto it = bt.find(o.oracle.value);
-            if (it == bt.end()){
-                bt.emplace(get_self(), [&](auto& r) {
-                    r.oracle = o.oracle;
-                    r.unpaid = each;
-                });
-            }else{
-                bt.modify(it, same_payer, [&](auto& r) { r.unpaid += each; });
+        for (auto oracleit = oracles_table.begin(); oracleit != oracles_table.end(); ++oracleit) {
+            if (!oracleit->suspended) {
+                auto it = bt.find(oracleit->oracle.value);
+                if (it == bt.end()){
+                    bt.emplace(get_self(), [&](auto& r) {
+                        r.oracle = oracleit->oracle;
+                        r.unpaid = each;
+                    });
+                }else{
+                    bt.modify(it, same_payer, [&](auto& r) { r.unpaid += each; });
+                }
             }
         }
     }
 }
 
+/* Initialize stipend tracking for an oracle */
+void orng::_init_stipend(name oracle, bool active) {
+    ostip_table_type ostip_t(get_self(), get_self().value);
+    auto stip_itr = ostip_t.find(oracle.value);
+
+    if (stip_itr == ostip_t.end()) {
+        // Create new entry
+        ostip_t.emplace(get_self(), [&](auto& s) {
+            s.oracle = oracle;
+            s.active = active;
+            s.last_claim = current_time_point();
+            s.last_accrue = current_time_point();
+            s.usd_accrued = 0;
+        });
+    } else {
+        // Update existing entry - only update active flag, preserve accrued amount
+        ostip_t.modify(stip_itr, same_payer, [&](auto& s) {
+            s.active = active;
+        });
+    }
+}
+
+/* Accrue stipend for an oracle up to the given time point */
+uint64_t orng::_accrue_stipend(name oracle, time_point now) {
+    ostip_table_type ostip_t(get_self(), get_self().value);
+    auto stip_itr = ostip_t.find(oracle.value);
+
+    if (stip_itr == ostip_t.end()) {
+        return 0;  // No stipend entry, nothing to accrue
+    }
+
+    // Only accrue if oracle is active
+    if (!stip_itr->active) {
+        return 0;
+    }
+
+    // Calculate time delta in seconds
+    int64_t delta_seconds = now.sec_since_epoch() - stip_itr->last_accrue.sec_since_epoch();
+    uint64_t stipend_per_month = get_config(stipendmonth_index, 0);
+    if (stipend_per_month == 0 || delta_seconds <= 0) {
+        return 0;  // No stipend configured or no time elapsed
+    }   
+    check(delta_seconds < UINT64_MAX / stipend_per_month, "accrual overflow");
+
+    // Calculate accrued stipend: (delta_seconds * stipend_per_month) / (30 * 24 * 3600)
+    // Use 30 days = 2,592,000 seconds as the monthly period
+    const uint64_t SECONDS_PER_MONTH = 30 * 24 * 3600;  // 2,592,000
+    uint64_t accrued = (delta_seconds * stipend_per_month) / SECONDS_PER_MONTH;
+
+    return accrued;
+}
+
 void orng::claim(const eosio::name& oracle) {
     eosio::check(!is_paused(), "paused");
     require_auth(oracle);
+
+    auto now = current_time_point();
+
+    // Get stipend entry (oracle must exist in ostip table)
+    ostip_table_type ostip_t(get_self(), get_self().value);
+    auto stip_itr = ostip_t.find(oracle.value);
+    check(stip_itr != ostip_t.end(), "not an oracle");
+
+    // Throttle claims - enforce minimum claim interval
+    uint64_t min_interval = get_config(minclaimint_index, 86400);  // default 24 hours
+    check((now - stip_itr->last_claim).to_seconds() >= min_interval, "too soon");
+
+    // Accrue stipend to 'now' (only if active)
+    uint64_t accrued = _accrue_stipend(oracle, now);
+
+    // Update stipend state with accrued amount
+    if (accrued > 0) {
+        ostip_t.modify(stip_itr, same_payer, [&](auto& s) {
+            s.usd_accrued += accrued;
+            s.last_accrue = now;
+        });
+    }
+
+    // Fetch WAX/USD price from Delphi oracle
+    uint64_t px = _fetch_wax_usd_price();  // BASE_PRECISION format
+
+    // Convert stipend USD → WAX
+    asset wax_from_stip = _usd_to_wax(stip_itr->usd_accrued, px);
+
+    // Get per-call fees from balances table
     bal_table_type bt(get_self(), get_self().value);
-    auto it = bt.require_find(oracle.value, "no balance");
-    check(it->unpaid.amount > 0, "zero balance");
-    asset pay = it->unpaid;
-    bt.modify(it, same_payer, [&](auto& r) { r.unpaid.amount = 0; });
+    auto bal_itr = bt.find(oracle.value);
+    asset fees = (bal_itr != bt.end()) ? bal_itr->unpaid : asset(0, WAX);
+
+    // Check that there is something to claim
+    check(fees.amount > 0 || wax_from_stip.amount > 0, "You have nothing to claim");
+
+    // Check treasury capacity for stipend only (fees come from oracle balance, not treasury)
+    auto treas = treas_singleton.get_or_default();
+    asset treasury_balance = asset(treas.pool_balance, WAX);
+    asset stip_can_pay = (wax_from_stip <= treasury_balance) ? wax_from_stip : treasury_balance;
+
+    // Calculate total payment: fees in full + stipend limited by treasury
+    asset fee_paid = fees;
+    asset stip_paid = stip_can_pay;
+    asset total_payment = fee_paid + stip_paid;
+
+    check(total_payment.amount > 0, "Unable to claim: no fees and treasury insolvent");
+
+    // Update fee balance
+    if (bal_itr != bt.end()) {
+        bt.modify(bal_itr, same_payer, [&](auto& b) {
+            b.unpaid -= fee_paid;
+        });
+    }
+
+    if (stip_paid.amount > 0){
+        // Update stipend state
+        ostip_t.modify(stip_itr, same_payer, [&](auto& s) {
+            s.usd_accrued -= _wax_to_usd(stip_paid, px);  // keep residual if partial
+            s.last_claim = now;
+        });
+
+        // Update treasury (only deduct stipend, not fees)
+        treas.pool_balance -= stip_paid.amount;
+        treas_singleton.set(treas, get_self());
+    }
+
+    // Transfer to oracle
     action{{get_self(), "active"_n},
             "eosio.token"_n,
             "transfer"_n,
-            std::make_tuple(get_self(), oracle, pay, string("rng reward"))}
+            std::make_tuple(get_self(), oracle, total_payment, string("RNG rewards"))}
         .send();
 }
 
 void orng::setpubkey(uint8_t version, const std::string &exponent, const std::string &modulus)
 {
-    require_auth(GOV);
+    require_auth(get_self());
     check(!is_paused(), "Contract is paused");
 
     check(modulus.size() > 0, "modulus must have non-zero length");
@@ -238,6 +595,9 @@ void orng::setpubkey(uint8_t version, const std::string &exponent, const std::st
 
     auto next_ver = pkey_table.begin() == pkey_table.end() ? 1 : std::prev(pkey_table.end())->ver + 1;
     check(version == next_ver, "version must increment by 1");
+    // Full signatures are accepted only in the modulus' own spelling (see check_canonical_signature)
+    check(modulus.size() % 2 == 0 && is_lower_hex(modulus),
+          "modulus must be lower-case hex with an even number of digits (whole bytes)");
 
     pkey_table.emplace(get_self(), [&](auto &r){ 
                 r.ver=version;
@@ -249,7 +609,7 @@ void orng::setpubkey(uint8_t version, const std::string &exponent, const std::st
 }
 
 void orng::retirepubkey(uint8_t version){
-    require_auth(GOV);
+    require_auth(get_self());
     auto it = pkey_table.require_find(version, "key not found");
     pkey_table.modify(it, same_payer, [&](auto &r){
         r.retired = true;
@@ -257,7 +617,7 @@ void orng::retirepubkey(uint8_t version){
 }
 
 void orng::setoracles(const std::vector<eosio::name> &oracles){
-    require_auth(GOV); 
+    require_auth(get_self());
      // Clear existing oracles
     auto it = oracles_table.begin();
     while(it != oracles_table.end()) {
@@ -270,31 +630,154 @@ void orng::setoracles(const std::vector<eosio::name> &oracles){
              r.oracle=n;
              r.oracle_index=index;
         });
+        // Auto-initialize stipend entry with active=true
+        _init_stipend(n, true);
         index++;
     }
 }
 
 void orng::resetsuspen(const eosio::name &oracle)
 {
-    require_auth(GOV);
+    require_auth(get_self());
     oracles_table_type ot(get_self(), get_self().value);
     auto it = ot.require_find(oracle.value, "unknown oracle");
-    ot.modify(it, same_payer, [&](auto &r){ 
+    ot.modify(it, same_payer, [&](auto &r){
         r.strikes=0;
-        r.suspended=false; 
+        r.suspended=false;
     });
+
+    // Reactivate stipend accrual
+    ostip_table_type ostip_t(get_self(), get_self().value);
+    auto stip_itr = ostip_t.find(oracle.value);
+    if (stip_itr != ostip_t.end()) {
+        // Accrue stipend up to now before reactivating
+        auto now = current_time_point();
+        uint64_t accrued = _accrue_stipend(oracle, now);
+
+        // Update stipend state with accrued amount and reactivate
+        ostip_t.modify(stip_itr, same_payer, [&](auto& s) {
+            s.usd_accrued += accrued;  // Add accrued amount
+            s.active = true;  // Resume accruing stipend
+            s.last_accrue = now;  // Reset last accrue time to now
+        });
+    }
 }
 
-void orng::configv2(const eosio::asset &fee_per_call, uint8_t strike_max, uint8_t k_calls_per_wax, uint64_t treas_hardfloor){
+void orng::setstipend(const eosio::name &oracle, bool active) {
+    require_auth(get_self());
+
+    // Check oracle exists in oracles table
+    auto oit = oracles_table.require_find(oracle.value, "unknown oracle");
+
+    // Get or create stipend entry
+    ostip_table_type ostip_t(get_self(), get_self().value);
+    auto stip_itr = ostip_t.find(oracle.value);
+
+    if (stip_itr == ostip_t.end()) {
+        // Create new stipend entry
+        ostip_t.emplace(get_self(), [&](auto& s) {
+            s.oracle = oracle;
+            s.active = active;
+            s.last_claim = current_time_point();
+            s.last_accrue = current_time_point();
+            s.usd_accrued = 0;
+        });
+    } else {
+        // Update existing entry - accrue stipend and modify active flag
+        auto now = current_time_point();
+        uint64_t accrued = _accrue_stipend(oracle, now);
+        ostip_t.modify(stip_itr, same_payer, [&](auto& s) {
+            s.usd_accrued += accrued;  // Add accrued amount
+            s.active = active;
+            s.last_accrue = now;
+        });
+    }
+}
+
+void orng::reconcile() {
+    require_auth(get_self());
+
+    tokenview::token_accounts_type accounts("eosio.token"_n, get_self().value);
+    auto held_it = accounts.find(WAX.code().raw());
+    check(held_it != accounts.end(), "orng.wax has no eosio.token WAX balance row; nothing to reconcile against");
+    const asset held = held_it->balance;
+
+    // WAX the account holds for others. None of it is treasury.
+    asset staked{0, WAX};
+    asset unstaking{0, WAX};
+    asset dapp_fees{0, WAX};
+    for (auto it = acct_table.begin(); it != acct_table.end(); ++it) {
+        staked += it->stake;
+        dapp_fees += it->fee_balance;
+        // unstakeuser requires an acctstate row and acctstate rows are never erased, so every
+        // `unstake` scope is one of these dapps.
+        unstake_table_type unstake_table(get_self(), it->dapp.value);
+        for (auto u = unstake_table.begin(); u != unstake_table.end(); ++u) {
+            unstaking += u->amount;
+        }
+    }
+    const asset stats{stakestats_singleton.get_or_default(stakestats{}).total_stake_amount, WAX};
+    check(staked == stats,
+          "stakestats.total_stake_amount (" + stats.to_string() + ") does not equal the sum of acctstate stakes (" +
+          staked.to_string() + "); fix the stake counter before reconciling the treasury");
+
+    asset oracle_fees{0, WAX};
+    bal_table_type bt(get_self(), get_self().value);
+    for (auto it = bt.begin(); it != bt.end(); ++it) {
+        oracle_fees += it->unpaid;
+    }
+
+    // Fees already debited from dApps for requests still in flight: a paid request in `reqs` pays
+    // fee_per_call on setrand; a paid row in `undelivered1` pays fee_per_call / 2 on delivery
+    // until its reward deadline.
+    const int64_t fee_per_call = get_config(fee_per_call_index, 0);
+    asset in_flight{0, WAX};
+    for (auto it = req_table.begin(); it != req_table.end(); ++it) {
+        if (!it->free_call) {
+            in_flight.amount += fee_per_call;
+        }
+    }
+    undelivered_table_type undelivered_table(get_self(), get_self().value);
+    const auto now = current_time_point();
+    for (auto it = undelivered_table.begin(); it != undelivered_table.end(); ++it) {
+        if (!it->free_call && now <= it->oracle_reward_deadline) {
+            in_flight.amount += fee_per_call / 2;
+        }
+    }
+
+    const asset liabilities = staked + unstaking + dapp_fees + oracle_fees + in_flight;
+    check(held >= liabilities,
+          "WAX held for others (" + liabilities.to_string() + " = stakes " + staked.to_string() +
+          " + unstaking " + unstaking.to_string() + " + dapp fees " + dapp_fees.to_string() +
+          " + oracle fees " + oracle_fees.to_string() + " + in-flight fees " + in_flight.to_string() +
+          ") exceeds the WAX held (" + held.to_string() +
+          "); the account is insolvent and the treasury counter cannot be reconciled");
+    const uint64_t pool = static_cast<uint64_t>((held - liabilities).amount);
+
+    auto treas = treas_singleton.get_or_default(treasury{});
+    eosio::print("reconcile: pool_balance ", treas.pool_balance, " -> ", pool,
+                 " (held ", held, ", stakes ", staked, ", unstaking ", unstaking,
+                 ", dapp fees ", dapp_fees, ", oracle fees ", oracle_fees, ", in-flight fees ", in_flight, ")");
+
+    treas.pool_balance = pool;
+    treas_singleton.set(treas, get_self());
+}
+
+void orng::configv2(const eosio::asset &fee_per_call, uint8_t strike_max){
     require_auth(get_self());
     set_config(fee_per_call_index, fee_per_call.amount);
     set_config(strikes_max_index, strike_max);
-    set_config(k_calls_per_wax_index, k_calls_per_wax);
-    set_config(treas_hardfloor_multiplier_index, treas_hardfloor);
+}
+
+void orng::configv3(uint64_t stipendmonth, uint64_t minclaimint){
+    require_auth(get_self());
+    set_config(stipendmonth_index, stipendmonth);
+    set_config(minclaimint_index, minclaimint);
 }
 
 /* submitpart (store only) */
 void orng::submitpart(name oracle, uint64_t id, uint8_t ver, string sig_i) {
+    require_auth(oracle);
     eosio::check(!is_paused(), "paused");
     auto oit = oracles_table.require_find(oracle.value, "unknown oracle");
     check(!oit->suspended, "oracle suspended");
@@ -312,36 +795,45 @@ void orng::requestrand(uint64_t assoc_id, uint64_t signing_value, const eosio::n
     require_auth(caller);
 
     auto ban_list_it = ban_list_table.find(caller.value);
-    if(ban_list_it != ban_list_table.end()) {
-      return; // silently exit for banned accounts
-    }
+    check(ban_list_it == ban_list_table.end(), "Account is banned from using this service");
 
     auto version = get_config(active_ver_index, 0);
     check(version > 0, "key version not set");
 
     auto fee_per_call = get_config(fee_per_call_index, 0);
 
-    auto it = acct_table.require_find(caller.value,"Please stake first"); 
+    // Auto-register dApp if not registered (for seamless migration)
+    auto it = acct_table.find(caller.value);
+    if (it == acct_table.end()) {
+        auto cfg = adaptiveconfig_singleton.get_or_default(adaptiveconfig{});
+        uint32_t init_free_call = (cfg.per_dapp_min_calls_per_hr * cfg.burst_window_hours) / 100;
+        acct_table.emplace(get_self(), [&](auto& r) {
+            r.dapp = caller;
+            r.stake = asset{0, WAX};
+            r.fee_balance = asset{0, WAX};
+            r.credits = init_free_call;  // Start with configured free tier credits
+            r.last_update = time_point_sec(current_time_point());
+            r.last_nonce = 0;
+        });
+        it = acct_table.find(caller.value);
+    }
     _refill(it);
     bool free_call = false;
     if(it->credits == 0){
-        check(it->fee_balance.amount >= fee_per_call, "Please deposit");
+        eosio::check(
+            it->fee_balance.amount >= fee_per_call,
+            ("WAX RNG: " + caller.to_string() +
+             " is out of usage credits - alert operator (see https://github.com/worldwide-asset-exchange/wax-orng)")
+        );
         acct_table.modify(it,same_payer,[&](auto&r){ 
             r.fee_balance -= asset{static_cast<int64_t>(fee_per_call), WAX};
         });
     } else {
-        // check treasury balance
-        check(treas_singleton.exists(), "Treasury has no balance");
-        auto treas_hardfloor_multiplier = get_config(treas_hardfloor_multiplier_index, 10);
-        auto treas = treas_singleton.get();
-        check(treas.pool_balance >= treas_hardfloor_multiplier * fee_per_call, "Treasury balance is insufficient");
+        // Use free tier (staking credits)
         acct_table.modify(it,same_payer,[&](auto&r){
-             r.credits--; 
+             r.credits--;
         });
         free_call = true;
-        // deduct from treasury pool
-        treas.pool_balance -= fee_per_call;
-        treas_singleton.set(treas, _self);
     }
 
     uint64_t nonce = it->last_nonce + 1;
@@ -349,17 +841,41 @@ void orng::requestrand(uint64_t assoc_id, uint64_t signing_value, const eosio::n
          r.last_nonce = nonce; 
     });
 
+    // Auto-collection mode: capture legacy dapps during collection window
+    bool collection_enabled = get_config(collection_enabled_index, 0) != 0;
+    if (collection_enabled) {
+        uint64_t current_time_sec = current_time_point().sec_since_epoch();
+        uint64_t collection_end = get_config(collection_end_index, 0);
+
+        // Check if still within collection window
+        if (current_time_sec <= collection_end) {
+            auto legacy_it = legacycallback_table.find(caller.value);
+
+            // Only add if not already in the table
+            if (legacy_it == legacycallback_table.end()) {
+                checksum256 code_hash = get_code_hash(caller);
+
+                legacycallback_table.emplace(get_self(), [&](auto& r) {
+                    r.dapp = caller;
+                    r.code_hash = code_hash;
+                    r.added_time = time_point_sec(current_time_sec);
+                    r.auto_collected = true;
+                });
+            }
+        }
+    }
+
     // Convert signing_value to checksum256 using sha256(to_string(signing_value))
     std::string signing_value_str = std::to_string(signing_value);
     checksum256 seed = sha256(signing_value_str.c_str(), signing_value_str.size());
-    
+
     auto next_job_id = generate_next_index();
     req_table.emplace(caller,[&](auto&r){
         r.id = next_job_id;
-        r.dapp = caller; 
+        r.dapp = caller;
         r.seed = seed;
-        r.ver = version; 
-        r.nonce = nonce; 
+        r.ver = version;
+        r.nonce = nonce;
         r.assoc_id = assoc_id;
         r.free_call = free_call;
         r.parts.clear();
@@ -374,18 +890,24 @@ ACTION orng::setrand(name oracle, uint64_t id, uint8_t ver, std::string sig){
     uint64_t fee_per_call = get_config(fee_per_call_index, 0);
     auto rit = req_table.require_find(id, "no request found");
 
-    // Attempt direct delivery via inline action
-    action{
-        permission_level{get_self(), "active"_n},
-        rit->dapp, "receiverand"_n,
-        std::make_tuple(rit->assoc_id, rnd)
-    }.send();
+    // Read was_paid before erasing request (free_call=false means paid)
+    bool was_paid = !rit->free_call;
+
+    // Attempt delivery using new dual delivery mechanism
+    _deliver_random(rit->dapp, rit->assoc_id, rnd);
+
+    bool is_free_call = rit->free_call;
 
     // If we reach here, delivery succeeded - clean up request
     req_table.erase(rit);
 
-    _reward_oracles(asset{static_cast<int64_t>(fee_per_call), WAX});
-    
+    // Update EMA after successful delivery
+    _update_paid_ema(was_paid);
+
+    if (!is_free_call) {
+        _reward_oracles(asset{static_cast<int64_t>(fee_per_call), WAX});
+    }
+
     // Light cleanup on successful direct delivery - very small batch
     _cleanup_expired_results(5);
 }
@@ -400,8 +922,8 @@ ACTION orng::markfailed(name oracle, uint64_t id, uint8_t ver, std::string sig, 
     // Store result in undelivered table with error message
     undelivered_table_type undelivered_table(get_self(), get_self().value);
     uint64_t oracle_deadline_seconds = get_config(oracle_reward_deadline_index, 86400 * 1); // default 1 day
-    
-    
+
+
     undelivered_table.emplace(get_self(), [&](auto& r) {
         r.request_id = rit->id;
         r.dapp = rit->dapp;
@@ -409,14 +931,19 @@ ACTION orng::markfailed(name oracle, uint64_t id, uint8_t ver, std::string sig, 
         r.rnd = rnd;
         r.error_message = error_message;
         r.oracle_reward_deadline = current_time_point() + eosio::seconds(oracle_deadline_seconds);
+        r.free_call = rit->free_call;
     });
+
+    bool is_free_call = rit->free_call;
 
     // Clean up request
     req_table.erase(rit);
 
-    // Give oracle 50% reward immediately
-    _reward_oracles(asset{static_cast<int64_t>(fee_per_call / 2), WAX});
-    
+    // Give oracle 50% reward immediately (only for paid calls)
+    if (!is_free_call) {
+        _reward_oracles(asset{static_cast<int64_t>(fee_per_call / 2), WAX});
+    }
+
     // Opportunistic cleanup - small batch to avoid timeout
     _cleanup_expired_results(10);
 }
@@ -429,29 +956,26 @@ ACTION orng::retrydeliver(uint64_t request_id) {
 
     // Check if any oracle can still claim reward
     bool oracle_can_claim = (current_time_point() <= undelivered_it->oracle_reward_deadline);
+    bool is_free_call = undelivered_it->free_call;
 
-    // Attempt delivery via inline action
-    action{
-        permission_level{get_self(), "active"_n},
-        undelivered_it->dapp, "receiverand"_n,
-        std::make_tuple(undelivered_it->assoc_id, undelivered_it->rnd)
-    }.send();
+    // Attempt delivery via legacy callback only (this is a manual retry for failed legacy callbacks)
+    _deliver_random(undelivered_it->dapp, undelivered_it->assoc_id, undelivered_it->rnd);
 
-    // If we reach here, delivery succeeded - give remaining reward if eligible
-    if (oracle_can_claim) {
+    // If we reach here, delivery succeeded - give remaining reward if eligible (only for paid calls)
+    if (oracle_can_claim && !is_free_call) {
         uint64_t fee_per_call = get_config(fee_per_call_index, 0);
         _reward_oracles(asset{static_cast<int64_t>(fee_per_call / 2), WAX}); // remaining 50%
     }
 
     // Remove from undelivered table
     undelivered_table.erase(undelivered_it);
-    
+
     // Light cleanup
     _cleanup_expired_results(5);
 }
 
 ACTION orng::killjobs(const std::vector<uint64_t>& job_ids) {
-    require_auth(GOV);
+    require_auth(get_self());
 
     for (const auto& id : job_ids) {
         auto job_it = req_table.find(id);
@@ -477,6 +1001,137 @@ ACTION orng::unban(const eosio::name& dapp) {
 
     auto ban_list_it = ban_list_table.require_find(dapp.value, "Dapp not in the banlist");
     ban_list_table.erase(ban_list_it);
+}
+
+ACTION orng::toggleallow(bool enabled) {
+    require_auth(get_self());
+    check(!is_paused(), "Contract is paused");
+    set_config(allowlist_enabled_index, enabled ? 1 : 0);
+}
+
+ACTION orng::enablecoll(uint64_t duration_seconds) {
+    require_auth(get_self());
+    check(!is_paused(), "Contract is paused");
+    check(duration_seconds > 0, "duration must be positive");
+
+    uint64_t start_time = current_time_point().sec_since_epoch();
+    uint64_t end_time = start_time + duration_seconds;
+
+    set_config(collection_enabled_index, 1);
+    set_config(collection_start_index, start_time);
+    set_config(collection_end_index, end_time);
+}
+
+ACTION orng::disablecoll() {
+    require_auth(get_self());
+    check(!is_paused(), "Contract is paused");
+
+    set_config(collection_enabled_index, 0);
+}
+
+ACTION orng::resetcoll() {
+    require_auth(get_self());
+    check(!is_paused(), "Contract is paused");
+
+    // Remove all auto-collected entries
+    auto it = legacycallback_table.begin();
+    while (it != legacycallback_table.end()) {
+        if (it->auto_collected) {
+            it = legacycallback_table.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+ACTION orng::addlegacy(const eosio::name &dapp) {
+    require_auth(get_self());
+    check(!is_paused(), "Contract is paused");
+    check(is_account(dapp), "dapp account does not exist");
+
+    auto legacy_it = legacycallback_table.find(dapp.value);
+    check(legacy_it == legacycallback_table.end(), "dapp already in legacy callback list");
+
+    // Capture current code hash
+    checksum256 code_hash = get_code_hash(dapp);
+
+    uint64_t current_time = current_time_point().sec_since_epoch();
+
+    legacycallback_table.emplace(get_self(), [&](auto& r) {
+        r.dapp = dapp;
+        r.code_hash = code_hash;
+        r.added_time = time_point_sec(current_time);
+        r.auto_collected = false;
+    });
+}
+
+ACTION orng::rmlegacy(const eosio::name &dapp) {
+    require_auth(get_self());
+    check(!is_paused(), "Contract is paused");
+
+    auto legacy_it = legacycallback_table.require_find(dapp.value, "dapp not in legacy callback list");
+    legacycallback_table.erase(legacy_it);
+}
+
+ACTION orng::skiplegacy(const eosio::name &dapp) {
+    require_auth(dapp);
+    check(!is_paused(), "Contract is paused");
+    check(is_account(dapp), "dapp account does not exist");
+
+    // Check if already in allowlist
+    auto legacy_it = legacycallback_table.find(dapp.value);
+    check(legacy_it == legacycallback_table.end(),
+          "dapp already in legacy callback list - contact support if you need to update");
+
+    // Create impossible hash (all zeros - no code can hash to this)
+    checksum256 invalid_hash;
+    memset(&invalid_hash, 0, sizeof(checksum256));
+
+    uint64_t current_time = current_time_point().sec_since_epoch();
+
+    legacycallback_table.emplace(dapp, [&](auto& r) {
+        r.dapp = dapp;
+        r.code_hash = invalid_hash;
+        r.added_time = time_point_sec(current_time);
+        r.auto_collected = false;
+    });
+}
+
+ACTION orng::updatelegacy(const eosio::name &dapp, const eosio::checksum256 &new_code_hash) {
+    require_auth(get_self());
+    check(!is_paused(), "Contract is paused");
+
+    auto legacy_it = legacycallback_table.require_find(dapp.value, "dapp not in legacy callback list");
+
+    legacycallback_table.modify(legacy_it, same_payer, [&](auto& r) {
+        r.code_hash = new_code_hash;
+    });
+}
+
+ACTION orng::verifyhash(const eosio::name &dapp) {
+    check(!is_paused(), "Contract is paused");
+    check(is_account(dapp), "dapp account does not exist");
+
+    auto legacy_it = legacycallback_table.find(dapp.value);
+    if (legacy_it == legacycallback_table.end()) {
+        return; // Not in legacy callback list, nothing to do
+    }
+
+    // Get current code hash
+    checksum256 current_hash = get_code_hash(dapp);
+
+    // If code hash doesn't match, remove from legacy callback list (auto-migration)
+    if (current_hash != legacy_it->code_hash) {
+        legacycallback_table.erase(legacy_it);
+    }
+}
+
+ACTION orng::randnotify(uint64_t request_id, eosio::name dapp, uint64_t assoc_id, const eosio::checksum256& rnd) {
+    require_auth(get_self());
+
+    // This action serves as a notification mechanism using require_recipient
+    // The dapp can handle this via [[eosio::on_notify("orng.wax::randnotify")]]
+    require_recipient(dapp);
 }
 
 bool orng::is_paused() const {
@@ -505,14 +1160,6 @@ void orng::set_config(uint64_t name, int64_t value) {
 int64_t orng::get_config(uint64_t name, int64_t default_value) const {
     auto it = config_table.find(name);
     if (it == config_table.end())
-        return default_value;
-    return it->value;
-}
-
-int64_t orng::get_dapp_config(eosio::name dapp, uint64_t name, int64_t default_value) const {
-    dappconfig_table_type dappconfig_table(get_self(), dapp.value);
-    auto it = dappconfig_table.find(name);
-    if (it == dappconfig_table.end())
         return default_value;
     return it->value;
 }
@@ -551,15 +1198,35 @@ eosio::checksum256 orng::_validate_and_compute_rnd(eosio::name oracle, uint64_t 
 
     auto pit = pkey_table.require_find(ver, "key not found");
     check(pit->retired == false, "key retired");
+    check_canonical_signature(sig, pit->modulus);
 
     checksum256 msg = make_msg(rit->seed, rit->dapp, rit->nonce);
     auto data = msg.extract_as_byte_array();
     bool ok = verify_rsa_sha256_sig(
-            data.data(), data.size(), sig.c_str(), pit->exponent, pit->modulus);
+            data.data(), data.size(), sig, pit->exponent, pit->modulus);
     if(!ok){
+        bool will_suspend = false;
         oracles_table.modify(oit, same_payer, [&](auto&r){
-            if(++r.strikes >= strikes_max) r.suspended=true;
+            if(++r.strikes >= strikes_max) {
+                r.suspended=true;
+                will_suspend = true;
+            }
         });
+        // If oracle just got suspended, deactivate stipend accrual
+        if (will_suspend) {
+            ostip_table_type ostip_t(get_self(), get_self().value);
+            auto stip_itr = ostip_t.find(oracle.value);
+            if (stip_itr != ostip_t.end()) {
+                auto now = current_time_point();
+                // Accrue stipend up to now before deactivating
+                uint64_t accrued = _accrue_stipend(oracle, now);
+                ostip_t.modify(stip_itr, same_payer, [&](auto& s) {
+                    s.usd_accrued += accrued;  // Add accrued amount
+                    s.active = false;  // Stop accruing stipend
+                    s.last_accrue = now;
+                });
+            }
+        }
         return checksum256{}; // empty checksum indicates failure
     }
     
@@ -568,29 +1235,27 @@ eosio::checksum256 orng::_validate_and_compute_rnd(eosio::name oracle, uint64_t 
 
 ACTION orng::getresult(eosio::name caller, uint64_t assoc_id) {
     require_auth(caller);
-    
+
     undelivered_table_type undelivered_table(get_self(), get_self().value);
     auto dapp_assoc_idx = undelivered_table.get_index<"bydappassoc"_n>();
     uint128_t dapp_assoc_key = (uint128_t{caller.value} << 64) | assoc_id;
     auto undelivered_it = dapp_assoc_idx.require_find(dapp_assoc_key, "No undelivered result found for this assoc_id");
-    
+
     // Check if oracle can still claim reward
     bool oracle_can_claim = (current_time_point() <= undelivered_it->oracle_reward_deadline);
-    
-    action{
-        permission_level{get_self(), "active"_n},
-        caller, "receiverand"_n,
-        std::make_tuple(assoc_id, undelivered_it->rnd)
-    }.send();
-    
-    // If delivery succeeded and oracle deadline not passed, give remaining reward
-    if (oracle_can_claim) {
+    bool is_free_call = undelivered_it->free_call;
+
+    // Use legacy callback only (this is a pull-based retry for failed legacy callbacks)
+    _deliver_random(caller, assoc_id, undelivered_it->rnd);
+
+    // If delivery succeeded and oracle deadline not passed, give remaining reward (only for paid calls)
+    if (oracle_can_claim && !is_free_call) {
         uint64_t fee_per_call = get_config(fee_per_call_index, 0);
         _reward_oracles(asset{static_cast<int64_t>(fee_per_call / 2), WAX}); // remaining 50%
     }
-    
+
     dapp_assoc_idx.erase(undelivered_it);
-    
+
     // Light cleanup
     _cleanup_expired_results(5);
 }
@@ -614,10 +1279,10 @@ void orng::_cleanup_expired_results(uint64_t batch_size) {
     if (std::distance(undelivered_table.begin(), undelivered_table.end()) < 10) {
         return; // Skip cleanup if few entries
     }
-    
+
     auto current_time = current_time_point();
     uint64_t processed = 0;
-    
+
     auto it = undelivered_table.begin();
     while (it != undelivered_table.end() && processed < batch_size) {
         // Clean up only when oracle reward deadline has passed
@@ -630,4 +1295,121 @@ void orng::_cleanup_expired_results(uint64_t batch_size) {
     }
 }
 
+bool orng::can_use_legacy_callback(eosio::name dapp) {
+    // Check if dapp exists in legacy callback table
+    auto legacy_it = legacycallback_table.find(dapp.value);
+    if (legacy_it == legacycallback_table.end()) {
+        return false; // Not in legacy callback list
+    }
+
+    // Get current code hash for the dapp
+    checksum256 current_hash = get_code_hash(dapp);
+
+    // Verify code hash matches
+    if (current_hash != legacy_it->code_hash) {
+        return false; // Code changed, auto-migrate to notification
+    }
+
+    return true; // All checks passed, can use legacy callback
+}
+
+bool orng::_deliver_random(eosio::name dapp, uint64_t assoc_id, const eosio::checksum256& rnd) {
+    bool allowlist_enabled = get_config(allowlist_enabled_index, 0) != 0;
+    bool use_legacy = allowlist_enabled && can_use_legacy_callback(dapp);
+
+    if (use_legacy) {
+        // Attempt legacy callback delivery
+       action{
+            permission_level{get_self(), "active"_n},
+            dapp, "receiverand"_n,
+            std::make_tuple(assoc_id, rnd)
+        }.send();
+    } else {
+        // Send notification via require_recipient
+        action{
+            permission_level{get_self(), "active"_n},
+            get_self(), "randnotify"_n,
+            std::make_tuple(uint64_t(0), dapp, assoc_id, rnd)  // request_id=0 for now
+        }.send();
+    }
+
+    return use_legacy;
+}
+uint64_t orng::_fetch_wax_usd_price() {
+    // Get the waxpusd pair info from Delphioracle
+    delphioracle::pairs_t pairs_table(delphioracle::DELPHIORACLE_ACCOUNT, delphioracle::DELPHIORACLE_ACCOUNT.value);
+    auto pair_it = pairs_table.require_find("waxpusd"_n.value, "waxpusd pair not found");
+
+    // Get quoted precision
+    uint64_t quoted_precision = pair_it->quoted_precision;
+
+    // Get the last datapoint (highest ID) from datapoints table scoped by waxpusd
+    delphioracle::datapoints_t datapoints_table = delphioracle::get_datapoints("waxpusd"_n);
+    check(datapoints_table.begin() != datapoints_table.end(), "no datapoints found for waxpusd");
+
+    // Get the last entry (highest id)
+    auto last_it = datapoints_table.end();
+    --last_it;
+
+    check(current_time_point() - last_it->timestamp < eosio::seconds(3600), "price data too stale");
+
+    uint64_t median = last_it->median;
+
+    uint64_t divisor = 1;
+    for (uint64_t i = 0; i < quoted_precision; i++) {
+        divisor *= 10;
+    }
+    uint64_t price_with_base_precision = median * BASE_PRECISION / divisor;
+
+    return price_with_base_precision;
+}
+
+asset orng::_usd_to_wax(uint64_t usd, uint64_t wax_price) {
+    check(wax_price > 0, "price must be greater than zero");
+    // usd is in BASE_PRECISION (10^4) formatting
+    // wax_price is in BASE_PRECISION (10^4) formatting 
+    // wax amount output should be in WAX units with 8 decimal places
+    if (usd == 0) {
+        return asset{0, WAX};
+    }
+    uint64_t wax_raw = (usd * BASE_PRECISION) / wax_price;
+    uint64_t wax_amount = wax_raw * WAX_PRECISION_POW / BASE_PRECISION;
+    return asset{static_cast<int64_t>(wax_amount), WAX};
+}
+
+uint64_t orng::_wax_to_usd(const asset& wax, uint64_t wax_price) {
+    check(wax_price > 0, "price must be greater than zero");
+    check(wax.symbol == WAX, "must be WAX asset");
+    check(wax.amount >= 0, "wax amount must be non-negative");
+
+    if (wax.amount == 0) {
+        return 0;
+    }
+    // already in BASE_PRECISION because wax_price is in BASE_PRECISION
+    uint64_t usd_amount = wax.amount * wax_price / WAX_PRECISION_POW; 
+    return usd_amount;
+}
+
+ACTION orng::configadptive(
+    uint32_t total_capacity_calls_per_hr,
+    uint32_t free_min_calls_per_hr,
+    uint32_t headroom_calls_per_hr,
+    uint32_t per_dapp_min_calls_per_hr,
+    uint32_t burst_window_hours,
+    uint32_t ema_half_life_sec,
+    uint32_t ema_min_update_sec
+) {
+    require_auth(get_self());
+
+    adaptiveconfig cfg;
+    cfg.total_capacity_calls_per_hr = total_capacity_calls_per_hr;
+    cfg.free_min_calls_per_hr = free_min_calls_per_hr;
+    cfg.headroom_calls_per_hr = headroom_calls_per_hr;
+    cfg.per_dapp_min_calls_per_hr = per_dapp_min_calls_per_hr;
+    cfg.burst_window_hours = burst_window_hours;
+    cfg.ema_half_life_sec = ema_half_life_sec;
+    cfg.ema_min_update_sec = ema_min_update_sec;
+
+    adaptiveconfig_singleton.set(cfg, get_self());
+}
 

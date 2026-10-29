@@ -12,10 +12,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          # Matches the supported runtime declared in package.json "engines".
-          # Bump once the build toolchain (webpack/babel) is modernized.
-          node-version: '16'
+          # Matches the runtime the production image runs (Dockerfile_eks: node:20-bookworm)
+          # and package.json "engines". mocha 6 does not run on Node >= 23.
+          node-version: '20'
       - run: npm install
+      # Custody-path dependency floors (node-forge >= 1.4.0, rsa-threshold-signatures >= 2.0.0)
+      - run: npm run check:deps
       - run: npm run lint
       - run: npm run test:unit
       # Integration tests spin up a WAX chain via qtest-js (Docker). Pre-pull the

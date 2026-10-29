@@ -1,13 +1,14 @@
 {
   "name": "wax-rng-oracle",
-  "version": "7.1.4",
+  "version": "7.2.0",
   "description": "Random number generator oracle for the WAX network",
   "main": "index.js",
   "license": "MIT",
   "scripts": {
     "build": "webpack --mode development",
     "test": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/*.js",
-    "test:unit": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/eos-header.test.js test/get-health-check-api.test.js test/get-version.test.js test/shuffle.test.js test/is-true.test.js",
+    "test:unit": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/eos-header.test.js test/get-health-check-api.test.js test/get-version.test.js test/shuffle.test.js test/is-true.test.js test/config-loader.test.js test/combine-partials.test.js test/boot-checks.test.js test/storage.test.js test/check-dep-floors.test.js",
+    "check:deps": "node scripts/check-dep-floors.js",
     "test:integration": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/get-jobs-api.test.js test/jobService.test.js test/jobService.collision.test.js test/poller.test.js",
     "coverage": "LOG_LEVEL=none NODE_ENV=test nyc mocha --exit test/*.js",
     "start": "npm run build && node index.js",
@@ -25,7 +26,7 @@
   },
   "dependencies": {
     "@slack/webhook": "^6.0.0",
-    "@waxio/rsa-threshold-signatures": "^1.3.0",
+    "@waxio/rsa-threshold-signatures": "^2.0.0",
     "axios": "^1.4.0",
     "config": "^3.3.9",
     "dotenv": "^16.3.1",
@@ -45,7 +46,7 @@
     "react-router": "2.5.0",
     "util": "^0.12.1",
     "winston": "3.0.0",
-    "node-forge": "^1.3.1"
+    "node-forge": "^1.4.0"
   },
   "devDependencies": {
     "babel-cli": "6.23.0",

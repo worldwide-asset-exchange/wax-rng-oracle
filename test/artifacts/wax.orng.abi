@@ -30,6 +30,10 @@
                 {
                     "name": "last_update",
                     "type": "time_point_sec"
+                },
+                {
+                    "name": "credits_nano",
+                    "type": "uint32$"
                 }
             ]
         },
@@ -441,6 +445,11 @@
                     "type": "checksum256"
                 }
             ]
+        },
+        {
+            "name": "reconcile",
+            "base": "",
+            "fields": []
         },
         {
             "name": "request",
@@ -951,6 +960,11 @@
         {
             "name": "randnotify",
             "type": "randnotify",
+            "ricardian_contract": ""
+        },
+        {
+            "name": "reconcile",
+            "type": "reconcile",
             "ricardian_contract": ""
         },
         {

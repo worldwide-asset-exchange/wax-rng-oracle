@@ -68,4 +68,56 @@ describe('GET /health-check', () => {
     );
     expect(mockRes.status).to.have.been.calledWith(500);
   });
+
+  describe('boot self-check reporting', () => {
+    const passed = {
+      ran: true,
+      ok: true,
+      rpcReachable: true,
+      activeKeyFound: true,
+      shareConsistent: true,
+      activeVer: 3,
+    };
+    const failed = { ...passed, ok: false, shareConsistent: false };
+
+    it('reports the boot-check booleans and stays healthy when it passed', async () => {
+      const res = mockResponse();
+      const controller = new HealthCheckController(mockEosRPC, () => passed);
+      await controller.getStatus(mockRequest(), res);
+      expect(res.status).to.have.been.calledWith(200);
+      expect(res.json).to.have.been.calledWith(
+        match({ healthy: true, eos: true, bootCheck: passed })
+      );
+    });
+
+    it('is unhealthy (500) when the boot check did not pass, even with the chain reachable', async () => {
+      const res = mockResponse();
+      const controller = new HealthCheckController(mockEosRPC, () => failed);
+      await controller.getStatus(mockRequest(), res);
+      expect(res.status).to.have.been.calledWith(500);
+      expect(res.json).to.have.been.calledWith(
+        match({ healthy: false, eos: true, bootCheck: failed })
+      );
+    });
+
+    it('is unhealthy when the boot check has not run', async () => {
+      const res = mockResponse();
+      const controller = new HealthCheckController(mockEosRPC, () => ({
+        ...failed,
+        ran: false,
+      }));
+      await controller.getStatus(mockRequest(), res);
+      expect(res.status).to.have.been.calledWith(500);
+    });
+
+    it('serves only booleans / the key version in bootCheck (no key material)', async () => {
+      const res = mockResponse();
+      const controller = new HealthCheckController(mockEosRPC, () => passed);
+      await controller.getStatus(mockRequest(), res);
+      const body = res.json.firstCall.args[0];
+      for (const [k, v] of Object.entries(body.bootCheck)) {
+        expect(typeof v, k).to.be.oneOf(['boolean', 'number']);
+      }
+    });
+  });
 });

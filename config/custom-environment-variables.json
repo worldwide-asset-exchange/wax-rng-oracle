@@ -39,6 +39,10 @@
   "jobPendingAlert": {
     "maxJobPending": "JOB_PENDING_ALERT_MAX_JOB_PENDING"
   },
+  "bootCheck": {
+    "rpcRetries": "BOOT_CHECK_RPC_RETRIES",
+    "rpcRetryBaseMs": "BOOT_CHECK_RPC_RETRY_BASE_MS"
+  },
   "db": {
     "file": "DB_FILE"
   },

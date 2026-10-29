@@ -7,7 +7,7 @@ const RngPusher = require('./lib/rngPusher');
 const JobService = require('./lib/jobService');
 const ShareKeyService = require('./lib/shareKeyService');
 const Storage = require('./lib/storage');
-const { eosRpc } = require('./lib/config/eos');
+const { eosRpc, createPlainRpc } = require('./lib/config/eos');
 const JobsController = require('./lib/controller/jobs');
 const HealthCheckController = require('./lib/controller/health-check');
 const App = require('./lib/app');
@@ -63,8 +63,10 @@ async function run() {
   // process (cluster workers included) so each signer checks what it holds.
   const bootStatus = await runBootChecks({
     shareKeyService,
-    rpc: eosRpc,
+    // plain RPC: the boot check owns its retry budget (eosRpc wraps fetch-retry)
+    rpc: createPlainRpc(),
     contractName: config.get('eos.orng.contractName'),
+    nodeOwner: config.get('eos.orng.nodeOwner'),
     retry: {
       attempts: parseInt(config.get('bootCheck.rpcRetries'), 10),
       baseDelayMs: parseInt(config.get('bootCheck.rpcRetryBaseMs'), 10),
@@ -104,7 +106,8 @@ async function run() {
     shareKeyService,
     rngPusher,
     jobService,
-    config.get('shareKey.shareIndex')
+    config.get('shareKey.shareIndex'),
+    { activeKeyVersion: bootStatus.activeVer }
   );
 
   if (isTrue(config.get('clusterMode')) && cluster.isPrimary) {
@@ -123,10 +126,14 @@ async function run() {
     }
 
     cluster.on('exit', (worker, code, signal) => {
-      logger.error(`Application: worker ${worker.process.pid} died`);
-      const DB = dbMap[worker.id];
+      // A worker is a signer (and, after this change, a boot-checker). Losing
+      // one would leave a half-dead member that still looks healthy; take the
+      // whole process down so the supervisor restarts it visibly.
+      logger.error(
+        `Application: worker ${worker.process.pid} died (code ${code}, signal ${signal}) — exiting primary`
+      );
       delete dbMap[worker.id];
-      // dbMap[replacementWorker.id] = DB;
+      process.exit(1);
     });
     process.on('exit', () =>
       logger.warn('Stopping wax-rng-oracle main process.')

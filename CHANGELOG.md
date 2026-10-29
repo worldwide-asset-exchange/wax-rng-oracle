@@ -26,8 +26,9 @@ the chain unchanged. Ticket: WBP-2067 (epic WBP-2063).
 
 ### Dependencies
 
-- `@waxio/rsa-threshold-signatures` `^1.3.0` → `^2.0.0` (from registry.npmjs.org, integrity
-  `sha512-TaXBgJhZ…`). `node-forge` range `^1.3.1` → `^1.4.0` so a lockfile regeneration cannot
+- `@waxio/rsa-threshold-signatures` `^1.3.0` → `^2.0.0` (lockfile `resolved` registry.npmjs.org,
+  integrity `sha512-TaXBgJhZ…`; verified with `npm ci --loglevel http` under the repo `.npmrc` that
+  the tarball is fetched from registry.npmjs.org, only the packument comes via `npmjs.thh.io`). `node-forge` range `^1.3.1` → `^1.4.0` so a lockfile regeneration cannot
   reintroduce the `modInverse(0)` hang; the installed tree has a single hoisted `node-forge` 1.4.0.
   `secp256k1` (now an optional peer of the library, unused by the oracle) and its native build step
   drop out of the tree. `@waxio/wax-config` 2.1.0 / `@waxio/fetch-retry` stay pinned to `npmjs.thh.io`.
@@ -42,20 +43,33 @@ the chain unchanged. Ticket: WBP-2067 (epic WBP-2063).
   member reads `orng.wax` `config.a[activever]` → `pubkeys[ver]` (must exist, not retired) and runs
   the library's `verifyShareConsistency` on its own share with that row as `expectedPublicKey`
   (binds `v^{s_i} = v_i`, Jacobi checks on `v`/`u`, modulus bit length and hex width, exponent
-  primality and `e > numParties`, index range, and n/e agreement with the chain).
+  primality and `e > numParties`, index range, and n/e agreement with the chain). It also reads
+  `oracles.a[nodeOwner]` and requires `oracle_index == SHARE_KEY_SHARE_INDEX` — `submitpart` stamps
+  the on-chain index on every partial, so a configured index that differs would mis-label them.
 - **Any failed check is fatal**: one log line naming the failed check(s) and the key version — never
   a value — then exit 1, so the pod crash-loops visibly instead of signing confidently and failing
   every combine (the silent-outage shape a wrong share after a re-key used to produce).
-- **RPC unreachable at boot**: bounded exponential retry (`BOOT_CHECK_RPC_RETRIES` ×
-  `BOOT_CHECK_RPC_RETRY_BASE_MS`, default 6 × 2 s doubling, 30 s cap per wait, ≈ 1 min total), then
-  **fail closed**. A member that cannot see the chain cannot poll either, so starting unchecked buys
-  nothing; the supervisor restart is the long-horizon retry. Unusable chain state (no active
-  version, missing or retired key row) is not retried.
+- **RPC unreachable at boot, or a row not visible yet** (a replaying / lagging node answers with
+  empty rows): bounded exponential retry — `BOOT_CHECK_RPC_RETRIES` × `BOOT_CHECK_RPC_RETRY_BASE_MS`,
+  default 6 attempts, 2 s doubling, 30 s cap per wait (≈ 62 s of waiting plus request time) — then
+  **fail closed**. The check uses a plain RPC client (no `fetch-retry` wrapper), so that budget is
+  the whole budget. A member that cannot see the chain cannot poll either, so starting unchecked
+  buys nothing; the supervisor restart is the long-horizon retry. Chain state that is present but
+  unusable (retired key, malformed row, index mismatch) is not retried.
 - A lying RPC can only make the check fail or echo the member's true key (equivalent to today); the
-  share and the verifier come from local configuration, the chain value is only compared.
+  share and the verifier come from local configuration, the chain value is only compared. The key
+  version it reports becomes the poller's **`activeKeyVersion` guard**: requests carrying any other
+  `ver` are skipped (never signed, never combined, one log line per unseen version +
+  `key_version_skipped` metric), so after a key rotation — or with a stale RPC answer at boot — the
+  member must restart and re-check rather than submit partials from the wrong share.
 - `/health-check` now also reports `bootCheck: { ran, ok, rpcReachable, activeKeyFound,
-  shareConsistent, activeVer }` (booleans + the public key version) and is `healthy: false` / 500
-  unless the check passed.
+  oracleIndexMatches, shareConsistent, activeVer }` (booleans + the public key version) and is
+  `healthy: false` / 500 unless the check passed.
+- The check runs in every mode, including `READONLY_MODE` (an API-only replica now needs a
+  chain-consistent share to start) and in every cluster worker; a worker that exits now takes the
+  primary down with it instead of leaving a half-dead member (`cluster.on('exit')` → `exit 1`).
+- Library parse errors on a malformed share value are redacted (`…; got <redacted>`) before they
+  reach a log line or the crash-loop stack — the library's own message quotes a prefix of the value.
 
 ### Combine diagnostics and retry policy (ORC-1 / SIG-4 / SIG-13)
 
@@ -73,7 +87,8 @@ the chain unchanged. Ticket: WBP-2067 (epic WBP-2063).
   is recorded **pinned to a fingerprint of the parts it failed on**, and the job is skipped until
   the on-chain parts change (another member submits, or the request is re-created). Every other
   failure keeps the existing exponential back-off / abandon policy. `combine_failed` metric with the
-  error code.
+  error code. The Slack alert for combine failures is throttled to one post per minute per member,
+  carrying the count of suppressed alerts, so a bad member cannot drown the signal.
 - The verifier is built once from this member's own key set rather than per combine from global
   config; the signature-share bound check now compares integers (it compared against the hex string
   before and could never fire).
@@ -98,8 +113,9 @@ the chain unchanged. Ticket: WBP-2067 (epic WBP-2063).
 
 - New, chain-free: `test/combine-partials.test.js`, `test/boot-checks.test.js`,
   `test/storage.test.js`, `test/check-dep-floors.test.js`; `/health-check` boot-check cases added.
-  The 4096-bit throwaway key set used by `poller.test.js` moved to `test/fixtures/testShareKeys.js`
-  (member 3 derived from `config/threshold-keys-test.json`). `npm run test:unit` now runs 11 files.
+  `test/fixtures/testShareKeys.js` derives the 4096-bit throwaway key set used by `poller.test.js`
+  from `config/threshold-keys-test.json` at load time (the inline copy is gone). `npm run test:unit`
+  now runs 11 files.
 - Against 6.0.0 (`762a514`, library 1.3.0) the poisoned-zero combine case throws
   `Intermediate verify signature is invalid` and the poller delivers nothing — the behaviour this
   release removes.

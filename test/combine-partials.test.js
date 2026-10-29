@@ -246,6 +246,65 @@ describe('combine partial signatures (reqs.parts → setrand sig)', function() {
       });
     });
 
+    it('skips (never signs or combines) a request whose key version is not the one the boot check verified', async () => {
+      const guarded = new Poller(
+        'rng1.wax',
+        services[1],
+        rngPusher,
+        jobService,
+        1,
+        { activeKeyVersion: 1 }
+      );
+      jobService.getJobsToProcess = sinon
+        .stub()
+        .resolves([{ ...baseJob(), id: 9, ver: 2, parts: [] }]);
+      jobService.getJobsToExecute.resolves([
+        { ...baseJob(), id: 10, ver: 2, parts: [parts[1], parts[2]] },
+        { ...baseJob(), id: 11, ver: 1, parts: [parts[1], parts[2]] },
+      ]);
+      const submit = sinon.stub().resolves({ transactionId: 'tx' });
+      rngPusher.submitPartialSignature = submit;
+
+      await guarded.pollJobsToSetPart();
+      await guarded.pollJobsToExecute();
+
+      expect(submit.callCount).to.equal(0);
+      expect(rngPusher.setRandomNumber.callCount).to.equal(1);
+      expect(rngPusher.setRandomNumber.firstCall.args[0].id).to.equal(11);
+      expect(jobService.jobSeedFailed.callCount).to.equal(0);
+    });
+
+    it('throttles the combine-failure Slack alert to one per interval and counts the rest', async () => {
+      const slack = require('../lib/config/slack');
+      const post = sinon.stub(slack, 'postMessage').resolves();
+      const throttled = new Poller(
+        'rng1.wax',
+        services[1],
+        rngPusher,
+        jobService,
+        1,
+        { activeKeyVersion: 1, combineAlertIntervalMs: 60 * 1000 }
+      );
+      const bad = id => ({
+        ...baseJob(),
+        id,
+        parts: [parts[1], { idx: 2, sig_i: '0' }],
+      });
+      jobService.getJobsToExecute.resolves([bad(1), bad(2), bad(3)]);
+
+      await throttled.pollJobsToExecute();
+      expect(post.callCount).to.equal(1);
+      expect(jobService.jobSeedFailed.callCount).to.equal(3);
+
+      throttled.combineAlert.lastPostAt -= 61 * 1000;
+      jobService.getJobsToExecute.resolves([bad(4)]);
+      await throttled.pollJobsToExecute();
+      expect(post.callCount).to.equal(2);
+      expect(post.secondCall.args[0]).to.include(
+        '+2 similar alert(s) suppressed'
+      );
+    });
+
     it('keeps going with the next job after a combine failure', async () => {
       const bad = {
         ...baseJob(),

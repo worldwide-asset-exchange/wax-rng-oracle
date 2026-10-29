@@ -239,16 +239,21 @@ DONE
 - **Boot share self-check.** Before signing anything the member reads the `orng.wax` `pubkeys` row
   for the active key version (`config.a` → `activever`) and verifies its own share against it with
   `verifyShareConsistency` from `@waxio/rsa-threshold-signatures` (share ↔ verification key binding,
-  Jacobi checks, modulus width, exponent, index range, n/e agreement with the chain). **Any failed
-  check is fatal** — one log line naming the failed check (never a value), exit 1, visible crash
-  loop. If the RPC is unreachable the check retries with back-off for about a minute, then fails
-  closed (see `BOOT_CHECK_*` below). `/health-check` reports the outcome as booleans under
-  `bootCheck` and is unhealthy unless it passed.
+  Jacobi checks, modulus width, exponent, index range, n/e agreement with the chain), and checks that
+  `oracles.a[EOS_ORNG_NODE_OWNER].oracle_index == SHARE_KEY_SHARE_INDEX`. **Any failed check is
+  fatal** — one log line naming the failed check (never a value), exit 1, visible crash loop. If the
+  RPC is unreachable or a row is not visible yet, the check retries with back-off (default 6
+  attempts, ≈ 1 min of waiting, plain RPC client with no inner retry) and then fails closed (see
+  `BOOT_CHECK_*` below). It runs in every mode, `READONLY_MODE` included. `/health-check` reports the
+  outcome as booleans under `bootCheck` and is unhealthy unless it passed. The verified key version
+  also gates the poller: requests with another `ver` are skipped until the member restarts and
+  re-checks (key rotation = re-key + restart).
 - **Combine diagnostics.** Partials read from `reqs.parts` are screened (hex string, integer index)
   and the library rejects zero / out-of-range / non-coprime values and tries k-subsets, so a single
   poisoned partial on chain no longer stalls a request. Rejected parts, failed subsets and the
   suspect share index are logged with the job id and this oracle's index; a job whose parts cannot
-  combine is parked until the on-chain parts change instead of being retried identically.
+  combine is parked until the on-chain parts change instead of being retried identically. The Slack
+  alert for combine failures is throttled to one per minute (with a suppressed count).
 - **Dependency floors.** `npm run check:deps` fails if any installed copy of `node-forge` is below
   1.4.0 or of `@waxio/rsa-threshold-signatures` below 2.0.0. It runs in CI (GitLab `gate` stage and
   the GitHub workflow) and inside the `Dockerfile_eks` build.
@@ -274,7 +279,8 @@ Default configuration is set in [config/default.json](./config/default.json). Yo
   `NODE_ENV=production`; `NODE_ENV=test` is reserved for the test runner (`config/test.json` is a
   fixture) and the oracle refuses to start with it
 - `BOOT_CHECK_RPC_RETRIES`, `BOOT_CHECK_RPC_RETRY_BASE_MS`: how long the boot share self-check waits
-  for the chain RPC before failing closed (default 6 attempts, 2 s doubling, 30 s cap per wait)
+  for the chain RPC before failing closed (default 6 attempts, 2 s doubling, 30 s cap per wait,
+  ≈ 62 s of waiting plus request time; no inner fetch retry)
 - `READONLY_MODE`: run express app only
 - `METRICS_HOST`, `METRICS_PORT`, `METRICS_PREFIX`: metrics config
 - `EOS_CHAIN_ID`: wax chain id

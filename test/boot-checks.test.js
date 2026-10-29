@@ -1,7 +1,8 @@
 // Boot self-check (ORC-3 / SIG-5): the member refuses to start unless its share
-// is consistent with the on-chain pubkeys row for the active version. The chain
-// RPC is mocked; the key set is a throwaway 2-of-3 / 1024-bit key generated
-// here (fast) with the library's own dealer.
+// is consistent with the on-chain pubkeys row for the active version AND its
+// configured share index is the oracle_index the contract holds for it. The
+// chain RPC is mocked; the key set is a throwaway 2-of-3 / 1024-bit key
+// generated here (fast) with the library's own dealer.
 const { expect } = require('chai');
 const sinon = require('sinon');
 const { ThresholdRSAKey } = require('@waxio/rsa-threshold-signatures');
@@ -10,6 +11,7 @@ const ShareKeyService = require('../lib/shareKeyService');
 const {
   runBootChecks,
   fetchActivePublicKey,
+  fetchOracleIndex,
   getBootCheckStatus,
   resetBootCheckStatus,
   assertRuntimeEnv,
@@ -17,6 +19,7 @@ const {
 } = require('../lib/bootChecks');
 
 const CONTRACT = 'orng.wax';
+const OWNER = 'rng1.wax';
 const ACTIVEVER = String(nameToUint64('activever'));
 const BITS = 1024;
 
@@ -40,21 +43,34 @@ async function generateKeySet(bits, threshold, numParties) {
   return { publicKey, members: [1, 2, 3].map(member) };
 }
 
-/** A fake get_table_rows serving config.a + pubkeys like nodeos (json: true). */
-// activeVer: null → no 'activever' row in config.a
-function fakeRpc({ activeVer = 1, pubkeys } = {}) {
+/**
+ * A fake get_table_rows serving config.a + pubkeys + oracles.a like nodeos
+ * (json: true). activeVer: null → no 'activever' row; oracles: null → no row.
+ */
+function fakeRpc({
+  activeVer = 1,
+  pubkeys,
+  oracles = [{ oracle: OWNER, oracle_index: 1, strikes: 0, suspended: 0 }],
+} = {}) {
   const rows = {
     'config.a':
       activeVer === null ? [] : [{ name: ACTIVEVER, value: activeVer }],
     pubkeys: pubkeys || [],
+    'oracles.a': oracles || [],
+  };
+  const keyField = {
+    'config.a': 'name',
+    pubkeys: 'ver',
+    'oracles.a': 'oracle',
   };
   return {
     get_table_rows: sinon.stub().callsFake(async params => {
       expect(params.code).to.equal(CONTRACT);
       const all = rows[params.table] || [];
-      const key = params.table === 'config.a' ? 'name' : 'ver';
       return {
-        rows: all.filter(r => String(r[key]) === String(params.lower_bound)),
+        rows: all.filter(
+          r => String(r[keyField[params.table]]) === String(params.lower_bound)
+        ),
         more: false,
       };
     }),
@@ -75,11 +91,22 @@ async function service(config) {
   return svc;
 }
 
+const noSleep = async () => {};
+
 describe('boot self-check', function() {
   this.timeout(30000);
   let keySet;
   let otherKeySet;
-  const noSleep = async () => {};
+
+  const run = (shareKeyService, rpc, extra = {}) =>
+    runBootChecks({
+      shareKeyService,
+      rpc,
+      contractName: CONTRACT,
+      nodeOwner: OWNER,
+      sleep: noSleep,
+      ...extra,
+    });
 
   before(async () => {
     keySet = await generateKeySet(BITS, 2, 3);
@@ -89,13 +116,10 @@ describe('boot self-check', function() {
   beforeEach(() => resetBootCheckStatus());
 
   it('passes for a consistent member and remembers booleans for /health-check', async () => {
-    const rpc = fakeRpc({ pubkeys: [pubkeyRow(keySet.publicKey)] });
-    const status = await runBootChecks({
-      shareKeyService: await service(keySet.members[1]),
-      rpc,
-      contractName: CONTRACT,
-      sleep: noSleep,
-    });
+    const status = await run(
+      await service(keySet.members[0]),
+      fakeRpc({ pubkeys: [pubkeyRow(keySet.publicKey)] })
+    );
     expect(status.ok).to.equal(true);
     expect(status.failedChecks).to.deep.equal([]);
     expect(getBootCheckStatus()).to.deep.equal({
@@ -103,6 +127,7 @@ describe('boot self-check', function() {
       ok: true,
       rpcReachable: true,
       activeKeyFound: true,
+      oracleIndexMatches: true,
       shareConsistent: true,
       activeVer: 1,
     });
@@ -123,12 +148,7 @@ describe('boot self-check', function() {
     const onChain = await fetchActivePublicKey(rpc, CONTRACT);
     expect(onChain.ver).to.equal(2);
     expect(onChain.modulus).to.equal(keySet.publicKey.n);
-    const status = await runBootChecks({
-      shareKeyService: await service(keySet.members[0]),
-      rpc,
-      contractName: CONTRACT,
-      sleep: noSleep,
-    });
+    const status = await run(await service(keySet.members[0]), rpc);
     expect(status.ok).to.equal(true);
     expect(status.activeVer).to.equal(2);
   });
@@ -138,43 +158,50 @@ describe('boot self-check', function() {
       ...keySet.members[0],
       sharedKey: keySet.members[1].sharedKey,
     };
-    const status = await runBootChecks({
-      shareKeyService: await service(mixed),
-      rpc: fakeRpc({ pubkeys: [pubkeyRow(keySet.publicKey)] }),
-      contractName: CONTRACT,
-      sleep: noSleep,
-    });
+    const status = await run(
+      await service(mixed),
+      fakeRpc({ pubkeys: [pubkeyRow(keySet.publicKey)] })
+    );
     expect(status.ok).to.equal(false);
     expect(status.shareConsistent).to.equal(false);
     expect(status.failedChecks).to.include('verificationKeyShare');
   });
 
-  it('refuses a wrong index (verification key share of another member)', async () => {
+  it('refuses a wrong index: configured share index differs from oracles.a oracle_index', async () => {
+    // member 2's complete, self-consistent share set deployed on the rng1.wax
+    // pod (oracle_index 1): the math checks pass, the on-chain index does not
+    const status = await run(
+      await service(keySet.members[1]),
+      fakeRpc({ pubkeys: [pubkeyRow(keySet.publicKey)] })
+    );
+    expect(status.ok).to.equal(false);
+    expect(status.activeKeyFound).to.equal(true);
+    expect(status.oracleIndexMatches).to.equal(false);
+    expect(status.failedChecks).to.deep.equal(['ORACLE_INDEX_MISMATCH']);
+  });
+
+  it('refuses a wrong index: verification key share of another member', async () => {
     const wrongIndex = {
       ...keySet.members[0],
-      shareIndex: 2,
       verificationKeyShare: keySet.members[1].verificationKeyShare,
     };
-    const status = await runBootChecks({
-      shareKeyService: await service(wrongIndex),
-      rpc: fakeRpc({ pubkeys: [pubkeyRow(keySet.publicKey)] }),
-      contractName: CONTRACT,
-      sleep: noSleep,
-    });
+    const status = await run(
+      await service(wrongIndex),
+      fakeRpc({ pubkeys: [pubkeyRow(keySet.publicKey)] })
+    );
     expect(status.ok).to.equal(false);
     expect(status.failedChecks).to.include('verificationKeyShare');
   });
 
   it('refuses when the on-chain modulus differs from the local public key', async () => {
-    const status = await runBootChecks({
-      shareKeyService: await service(keySet.members[0]),
-      rpc: fakeRpc({ pubkeys: [pubkeyRow(otherKeySet.publicKey)] }),
-      contractName: CONTRACT,
-      sleep: noSleep,
-    });
+    const status = await run(
+      await service(keySet.members[0]),
+      fakeRpc({ pubkeys: [pubkeyRow(otherKeySet.publicKey)] })
+    );
     expect(status.ok).to.equal(false);
     expect(status.rpcReachable).to.equal(true);
     expect(status.activeKeyFound).to.equal(true);
+    expect(status.oracleIndexMatches).to.equal(true);
     expect(status.shareConsistent).to.equal(false);
     expect(status.failedChecks).to.deep.equal(['expectedPublicKey']);
   });
@@ -182,12 +209,10 @@ describe('boot self-check', function() {
   it('refuses when the on-chain exponent differs', async () => {
     const row = pubkeyRow(keySet.publicKey);
     row.exponent = '3';
-    const status = await runBootChecks({
-      shareKeyService: await service(keySet.members[0]),
-      rpc: fakeRpc({ pubkeys: [row] }),
-      contractName: CONTRACT,
-      sleep: noSleep,
-    });
+    const status = await run(
+      await service(keySet.members[0]),
+      fakeRpc({ pubkeys: [row] })
+    );
     expect(status.ok).to.equal(false);
     expect(status.failedChecks).to.deep.equal(['expectedPublicKey']);
   });
@@ -195,37 +220,74 @@ describe('boot self-check', function() {
   it('refuses when the on-chain modulus is not the full width (truncated / unpadded row)', async () => {
     const row = pubkeyRow(keySet.publicKey);
     row.modulus = keySet.publicKey.n.replace(/^0+/, '').slice(1);
-    const status = await runBootChecks({
-      shareKeyService: await service(keySet.members[0]),
-      rpc: fakeRpc({ pubkeys: [row] }),
-      contractName: CONTRACT,
-      sleep: noSleep,
-    });
+    const status = await run(
+      await service(keySet.members[0]),
+      fakeRpc({ pubkeys: [row] })
+    );
     expect(status.ok).to.equal(false);
     expect(status.failedChecks).to.deep.equal(['expectedPublicKey']);
   });
 
-  it('fails closed when the active key row is missing or retired (no retry)', async () => {
-    for (const rpc of [
-      fakeRpc({ pubkeys: [] }),
-      fakeRpc({ pubkeys: [pubkeyRow(keySet.publicKey, 1, true)] }),
-      fakeRpc({ activeVer: null, pubkeys: [pubkeyRow(keySet.publicKey)] }),
+  it('names (never echoes) an on-chain row the library cannot parse', async () => {
+    const row = pubkeyRow(keySet.publicKey);
+    row.exponent = 'xyz';
+    const status = await run(
+      await service(keySet.members[0]),
+      fakeRpc({ pubkeys: [row] })
+    );
+    expect(status.ok).to.equal(false);
+    expect(status.shareConsistent).to.equal(false);
+    expect(status.failedChecks).to.deep.equal(['SHARE_CONFIG_UNPARSEABLE']);
+  });
+
+  it('fails closed without retry on chain state that is present but unusable (retired key)', async () => {
+    const rpc = fakeRpc({ pubkeys: [pubkeyRow(keySet.publicKey, 1, true)] });
+    const status = await run(await service(keySet.members[0]), rpc, {
+      retry: { attempts: 4 },
+    });
+    expect(status.ok).to.equal(false);
+    expect(status.rpcReachable).to.equal(true);
+    expect(status.activeKeyFound).to.equal(false);
+    expect(status.failedChecks).to.deep.equal(['ACTIVE_KEY_RETIRED']);
+    expect(rpc.get_table_rows.callCount).to.equal(2);
+  });
+
+  it('retries (a lagging node answers with empty rows) then fails closed when a row stays absent', async () => {
+    for (const [rpc, code] of [
+      [fakeRpc({ pubkeys: [] }), 'ACTIVE_KEY_MISSING'],
+      [
+        fakeRpc({ activeVer: null, pubkeys: [pubkeyRow(keySet.publicKey)] }),
+        'ACTIVE_VERSION_MISSING',
+      ],
+      [
+        fakeRpc({ pubkeys: [pubkeyRow(keySet.publicKey)], oracles: null }),
+        'ORACLE_NOT_REGISTERED',
+      ],
     ]) {
-      const status = await runBootChecks({
-        shareKeyService: await service(keySet.members[0]),
-        rpc,
-        contractName: CONTRACT,
-        retry: { attempts: 4 },
-        sleep: noSleep,
+      const sleep = sinon.stub().resolves();
+      const status = await run(await service(keySet.members[0]), rpc, {
+        retry: { attempts: 3, baseDelayMs: 5 },
+        sleep,
       });
       expect(status.ok).to.equal(false);
       expect(status.rpcReachable).to.equal(true);
-      expect(status.activeKeyFound).to.equal(false);
-      expect(status.failedChecks).to.have.length(1);
-      expect(status.failedChecks[0]).to.match(/^ACTIVE_(KEY|VERSION)_/);
-      // deterministic chain state is not retried
-      expect(rpc.get_table_rows.callCount).to.be.at.most(2);
+      expect(status.failedChecks).to.deep.equal([code]);
+      expect(sleep.callCount).to.equal(2);
     }
+  });
+
+  it('passes once the lagging row shows up within the retry budget', async () => {
+    const good = fakeRpc({ pubkeys: [pubkeyRow(keySet.publicKey)] });
+    const empty = fakeRpc({ activeVer: null });
+    let calls = 0;
+    const rpc = {
+      get_table_rows: params =>
+        (calls++ < 1 ? empty : good).get_table_rows(params),
+    };
+    const status = await run(await service(keySet.members[0]), rpc, {
+      retry: { attempts: 3, baseDelayMs: 1 },
+    });
+    expect(status.ok).to.equal(true);
   });
 
   it('retries a bounded number of times with backoff when the RPC is unreachable, then fails closed', async () => {
@@ -233,10 +295,7 @@ describe('boot self-check', function() {
       get_table_rows: sinon.stub().rejects(new Error('ECONNREFUSED')),
     };
     const sleep = sinon.stub().resolves();
-    const status = await runBootChecks({
-      shareKeyService: await service(keySet.members[0]),
-      rpc,
-      contractName: CONTRACT,
+    const status = await run(await service(keySet.members[0]), rpc, {
       retry: { attempts: 4, baseDelayMs: 10, maxDelayMs: 25 },
       sleep,
     });
@@ -257,12 +316,8 @@ describe('boot self-check', function() {
         .rejects(new Error('ETIMEDOUT'))
         .callsFake(good.get_table_rows),
     };
-    const status = await runBootChecks({
-      shareKeyService: await service(keySet.members[0]),
-      rpc: flaky,
-      contractName: CONTRACT,
+    const status = await run(await service(keySet.members[0]), flaky, {
       retry: { attempts: 3, baseDelayMs: 1 },
-      sleep: noSleep,
     });
     expect(status.ok).to.equal(true);
   });
@@ -272,10 +327,7 @@ describe('boot self-check', function() {
       get_table_rows: sinon.stub().rejects(new Error('ECONNREFUSED')),
     };
     const sleep = sinon.stub().resolves();
-    const status = await runBootChecks({
-      shareKeyService: await service(keySet.members[0]),
-      rpc,
-      contractName: CONTRACT,
+    const status = await run(await service(keySet.members[0]), rpc, {
       retry: { attempts: NaN, baseDelayMs: NaN },
       sleep,
     });
@@ -284,7 +336,7 @@ describe('boot self-check', function() {
     expect(sleep.firstCall.args[0]).to.equal(2000);
   });
 
-  it('exposes BootCheckError codes for unusable chain state', async () => {
+  it('exposes BootCheckError codes and retryability for chain state', async () => {
     let err;
     try {
       await fetchActivePublicKey(fakeRpc({ pubkeys: [] }), CONTRACT);
@@ -293,6 +345,20 @@ describe('boot self-check', function() {
     }
     expect(err).to.be.instanceOf(BootCheckError);
     expect(err.code).to.equal('ACTIVE_KEY_MISSING');
+    expect(err.retryable).to.equal(true);
+
+    expect(await fetchOracleIndex(fakeRpc(), CONTRACT, OWNER)).to.equal(1);
+    try {
+      await fetchOracleIndex(
+        fakeRpc({ oracles: [{ oracle: OWNER, oracle_index: 0 }] }),
+        CONTRACT,
+        OWNER
+      );
+    } catch (e) {
+      err = e;
+    }
+    expect(err.code).to.equal('ORACLE_INDEX_MALFORMED');
+    expect(err.retryable).to.equal(false);
   });
 
   describe('assertRuntimeEnv', () => {
@@ -303,6 +369,28 @@ describe('boot self-check', function() {
       for (const env of ['production', 'staging', 'local1', undefined]) {
         expect(() => assertRuntimeEnv(env)).to.not.throw();
       }
+    });
+  });
+
+  describe('ShareKeyService.initialize with a malformed share value', () => {
+    it('rejects it and never echoes the value', async () => {
+      const bad = {
+        ...keySet.members[0],
+        sharedKey:
+          keySet.members[0].sharedKey.slice(0, 60) + 'g' + 'ab'.repeat(8),
+      };
+      let err;
+      try {
+        await service(bad);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).to.exist;
+      expect(err.message).to.include('sharedKey');
+      expect(err.message).to.include('<redacted>');
+      expect(err.message).to.not.include(
+        keySet.members[0].sharedKey.slice(0, 12)
+      );
     });
   });
 });

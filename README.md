@@ -262,9 +262,9 @@ DONE
 
 `package.json` `version` follows the GitHub repository's release tags (unprefixed, e.g. `7.1.4` →
 `7.2.0`); bump it in the same change that earns it, record it in `CHANGELOG.md`, and `/version`
-echoes it. The GitLab lane that builds the production image tags `vX.Y.Z` on its own `main` (single
-increment over the highest existing `v*` tag, `v6.0.0` → `v6.1.0`); that tag identifies a build,
-not the app version.
+echoes it. The GitLab lane that builds the production image tags `v` + the same version on its own
+`main` (`7.2.0` ↔ `v7.2.0`); its gate requires a single increment, measured from `RELEASE_BASELINE`
+in `.gitlab-ci.yml` (`v7.1.4`) until a higher `v*` tag exists.
 
 ## Run the application
 

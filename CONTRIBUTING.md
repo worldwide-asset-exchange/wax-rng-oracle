@@ -54,9 +54,11 @@ configuration and local development details.
 
 ## Blockchain interaction
 
-Changes to on-chain interaction logic (the `orng.wax` contract actions:
-`setrand`, `signepoch`, `execjob`, etc.) require extra scrutiny. Please describe
-the expected on-chain behavior and how you verified it.
+Changes to on-chain interaction logic (the `orng.wax` contract actions the
+pollers push: `submitpart`, `setrand`, `markfailed`, `retrydeliver`, `cleanup`;
+the boot self-check against `pubkeys` / `oracles.a`; the combine diagnostics)
+require extra scrutiny. Please describe the expected on-chain behavior and how
+you verified it. The bytes of `sig_i` / `sig` sent to the chain must not change.
 
 ## Developer Certificate of Origin (DCO)
 

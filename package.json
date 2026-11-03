@@ -22,7 +22,7 @@
     "url": "git+https://github.com/worldwide-asset-exchange/wax-rng-oracle.git"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "@slack/webhook": "^6.0.0",

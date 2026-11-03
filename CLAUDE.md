@@ -4,12 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-WAX RNG Oracle is a NodeJS application for WAX Block Producers to process decentralized random number generation (RNG) jobs on the WAX blockchain. It interacts with the `orng.wax` smart contract to:
-- Update signing public keys
-- Participate in epoch processes (submitting seeds and signatures)
-- Poll and sign pending RNG jobs using RSA threshold signatures
-- Execute completed jobs and report failures
-- Clean up resolved signed values
+WAX RNG Oracle is the NodeJS member process of the WAX `orng.wax` randomness service. Each member
+holds one share of a 2-of-3 threshold RSA key (Shoup scheme, dealt at a key ceremony) and talks
+to the `orng.wax` smart contract to:
+- Verify at boot that its share matches the active on-chain `pubkeys` row and that its configured
+  share index equals its `oracles.a` `oracle_index` (`lib/bootChecks.js`; any failure is fatal)
+- Poll `reqs` and submit a partial signature for each request (`submitpart`)
+- Combine the on-chain partials into the full signature and deliver it (`setrand`), logging
+  combine diagnostics (rejected parts, suspect share index) and parking a request whose parts
+  cannot combine until they change
+- Report delivery failures (`markfailed`), retry delivery of `undelivered1` rows (`retrydeliver`)
+  and erase expired ones (`cleanup`)
+
+Key versions and membership are set on the contract by producer governance, not by this process.
+Operator-facing documentation: `docs/OPERATOR-GUIDE.md`.
 
 ## Build & Development Commands
 
@@ -67,7 +75,7 @@ cleos wallet import --private-key 5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79z
 - `config/default.json` - Default configuration
 - Environment-specific configs: `config/local1.json`, `config/local2.json`, etc.
 
-**Note:** For open source usage, the standard [config](https://www.npmjs.com/package/config) library is used. Internal WAX deployments can optionally use `@waxio/wax-config` for secrets management - if installed, it will be used automatically.
+**Note:** For open source usage, the standard [config](https://www.npmjs.com/package/config) library is used. Optionally, `@waxio/wax-config` resolves secrets from AWS Secrets Manager - if installed, it is used automatically (README, "Optional: AWS Secrets Manager").
 
 ### Key Dependencies
 - `@waxio/rsa-threshold-signatures` - RSA threshold signing library
@@ -85,7 +93,11 @@ Key environment variables:
 
 ## Smart Contract Integration
 
-When modifying blockchain interaction code, show detailed plans before making changes. The oracle interacts with the `orng.wax` contract for:
-- `setrand` - Submit partial signatures for jobs
-- `signepoch` - Sign epoch seeds
-- `execjob` - Execute completed RNG jobs
+When modifying blockchain interaction code, show detailed plans before making changes. The actions the pollers push (`lib/rngPusher.js` → `lib/config/eos.js`) are:
+- `submitpart(oracle, id, ver, sig_i)` - submit this member's partial signature for a request
+- `setrand(oracle, id, ver, sig)` - deliver the combined full signature
+- `markfailed(oracle, id, ver, sig, error_message)` - record a result whose delivery failed
+- `retrydeliver(oracle, request_id)` - retry delivery of an `undelivered1` row
+- `cleanup(oracle, batch_size)` - erase expired `undelivered1` rows
+
+The boot self-check (`lib/bootChecks.js`) only reads `config.a`, `pubkeys` and `oracles.a`. The byte format of `sig_i` and `sig` must not change (see `CHANGELOG.md` 7.2.0).

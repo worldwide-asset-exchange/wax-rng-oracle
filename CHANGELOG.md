@@ -10,12 +10,13 @@ v-prefixed tag on its `main`) and pinned by digest into the three member values 
 The application version follows the **GitHub repository** (`worldwide-asset-exchange/wax-rng-oracle`):
 `package.json` `version` is the next GitHub release tag (unprefixed, like `7.1.4`), bumped in the same
 change that earns it; `/version` echoes it. The **GitLab lane** (`monica.thh.io:wax/wax-rng-oracle`)
-only builds the production image: its release gate requires a v-prefixed single-increment tag on its
-`main` (`v6.0.0` shipped the current image), and that tag is a build identifier, **not** the app
-version. The two sequences differ on purpose; the image digest written into the values files is the
-real identity of what deploys. Next GitLab build tag for this release: `v6.1.0`.
+only builds the production image: its release gate wants a v-prefixed single-increment tag on its
+`main`, and from this release that tag is `v` + the app version (`v7.2.0` builds `7.2.0`). The
+GitLab line had stopped at `v6.0.0`; `RELEASE_BASELINE: v7.1.4` in the GitLab lane's `.gitlab-ci.yml` makes the gate
+measure the increment from the last GitHub release instead, so the two tags carry one number. The
+image digest written into the values files remains the real identity of what deploys.
 
-## 7.2.0 — unreleased
+## 7.2.0 — 2026-10-29 (GitHub tag `7.2.0` on `9f0ea8c`)
 
 Security-hardening release of the member process, adopting `@waxio/rsa-threshold-signatures` 2.0.0
 and closing the oracle-side findings of the 2026-10 RNG review (ORC-1, ORC-3, ORC-9; SIG-4/5/13 on
@@ -123,7 +124,7 @@ the chain unchanged. Ticket: WBP-2067 (epic WBP-2063).
 ### Version
 
 - `package.json` `7.1.4` → `7.2.0` (see *Version scheme* above). `/version` reports `7.2.0`.
-  GitLab build-lane tag for this release: `v6.1.0`.
+  GitLab build tag for this release: `v7.2.0`.
 
 ## 6.0.0 — 2026-08-30
 

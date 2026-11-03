@@ -1,17 +1,20 @@
 # wax-rng-oracle
 
-NodeJS Application for WAX Block Producers to Process RNG Jobs:
+> **Running a signing member?** Start with the
+> **[Operator guide](docs/OPERATOR-GUIDE.md)** — account and permissions, getting your key
+> share, configuration, running, verifying the boot self-check, and day-to-day operation.
 
-- Update the public keys that the node is using
-- Participate in the epoch process by submitting seeds and signatures to randomly chosen resolvers
-- Polling for pending RNG jobs and submit signature for job
-- Execute jobs that has been completed
-- Report failed job executions
-- Cleans signed value
+Node.js member process for the WAX `orng.wax` randomness service. Each member holds one share of
+a 2-of-3 threshold RSA key, polls the contract's `reqs` table, submits a partial signature for
+every request (`submitpart`), combines the on-chain partials into the full signature (`setrand`),
+and reports delivery failures (`markfailed`, `retrydeliver`, `cleanup`). Membership and key
+versions are set on the contract by producer governance; the process verifies its share against
+the active on-chain key before it signs anything.
 
 ## Development
 
-Require NodeJs version >16
+Requires Node.js 20 (the version CI and the released build run on; `engines` in
+`package.json` states the floor).
 
 Install dependencies first:
 

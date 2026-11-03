@@ -51,6 +51,53 @@ Placeholders are in angle brackets. Nothing in this document is a real key or sh
 - `cleos` (or any Antelope CLI) for the account steps.
 - `git`, `npm`.
 
+### Hardware
+
+A member is one Node.js process and the work per request is small: read the `reqs` row, compute
+one 4096-bit RSA partial signature, push `submitpart`; later combine and verify the parts locally
+before `setrand`. The rest is polling (`reqs` every 300 ms, the execute queue every second,
+retries every 5 s), about five small HTTP calls a second to your API node whether or not there is
+traffic.
+
+Measured with the signing library's own 4096-bit 2-of-3 test key (`@waxio/rsa-threshold-signatures`
+2.0.1, Node 24) on one fast desktop core; a typical cloud vCPU is two to three times slower:
+
+| Step | Cost | When |
+|---|---|---|
+| Partial signature | ~200 ms CPU | once per request |
+| Local combine + verify | ~30 ms CPU | once per request |
+| Share self-check | ~400 ms CPU | once, at boot |
+| Resident memory | ~80 MB idle, under 200 MB in service | always |
+| Checkout + dependencies | ~190 MB | once |
+
+Signing is serial inside the process, so one process saturates at about one request per signing
+time: 2–5 requests/s, or 170k–400k a day, on one vCPU. Mainnet ran 4k–10k requests a day in
+October–November 2026 (peaks near 0.1/s), so a single process is a few percent loaded.
+
+| | Minimum | Recommended |
+|---|---|---|
+| CPU | 1 vCPU, x86-64 or arm64 | 2 vCPU, a class that is not credit-throttled |
+| Memory | 1 GB | 2 GB |
+| Disk | 10 GB | 20 GB SSD |
+| Network | stable path to your API node | API node in the same region or LAN |
+
+- **CPU**: single-core speed matters, core count beyond two does not. Avoid burstable classes that
+  throttle once credits run out: a member that signs late simply misses requests (another member's
+  part completes the 2-of-3), earning no fee for them and alarming nobody.
+- **Memory**: the process needs well under 200 MB; the rest is the OS and headroom. Do not set a
+  `MemoryMax` tighter than 512 MB on the unit.
+- **Disk**: the application is ~190 MB installed. `DB_FILE` stays at a few kilobytes (it holds only
+  back-off state and clears itself). Logs go to stdout, so size the disk for the OS and the journal,
+  not the app; `LOGGER_LEVEL=info` writes a few MB a day.
+- **Network**: about five ~1 KB requests a second, around 10 GB a month. Latency and reliability to
+  the API node are what matter, bandwidth is not.
+- **Cluster mode**: leave `CLUSTER_MODE=false`. One worker per CPU buys nothing below roughly one
+  request per second sustained and has the working-directory caveat in section 3.
+- **Dedicated host**: the signing path is not constant-time (above), so a VM or bare-metal host you
+  control, not a container on a host shared with tenants you do not.
+- **No active-active**: never run two live processes on the same share index; the second one only
+  produces `duplicate part` rejections. A warm standby is `READONLY_MODE=true` (section 3).
+
 ## 1. Account and permissions
 
 ### 1.1 Create a dedicated signing permission
@@ -243,10 +290,17 @@ Two secrets exist: the key share (`SHARE_KEY_PRIVATE_KEY_HEX`) and the signing k
 ```bash
 git clone https://github.com/worldwide-asset-exchange/wax-rng-oracle.git /opt/wax-rng-oracle
 cd /opt/wax-rng-oracle && git checkout 7.2.0
-npm ci --ignore-scripts
+npm install --ignore-scripts
 npm run check:deps          # refuses a tree with node-forge < 1.4.0 or the signing library < 2.0.0
 NODE_ENV=production node index.js
 ```
+
+`npm install`, not `npm ci`: `package.json` lists two optional packages (`@waxio/wax-config`,
+`@waxio/fetch-retry`) that are published on a private registry and are therefore absent from the
+lockfile, and `npm ci` refuses a lockfile that does not list every optional dependency (`EUSAGE`,
+"Missing … from lock file"). `npm install` skips them with a warning, installs exactly the versions
+the lockfile pins for everything else, and the process runs without them (section 3.1). The
+`check:deps` line is the integrity check that matters.
 
 No container image ships with this repository (there is no Dockerfile). Build your own if you
 want one; the three commands above are the whole build.
@@ -306,7 +360,7 @@ journalctl -u wax-rng-oracle -f
 
 ### 6.1 Upgrades
 
-Upgrade **one member at a time**: stop, `git checkout <tag>`, `npm ci --ignore-scripts`,
+Upgrade **one member at a time**: stop, `git checkout <tag>`, `npm install --ignore-scripts`,
 `npm run check:deps`, start, confirm `bootCheck.ok` is `true` and partials are being submitted,
 then move to the next member. Two members down at once is no 2-of-3 quorum: the RNG stalls.
 
@@ -401,6 +455,7 @@ Boot self-check codes appear in `Refusing to start: boot self-check failed (<cod
 | `Oracle <member> is unknown` at runtime | removed by a later `setoracles` | ask governance |
 | `Oracle <member> is suspended` | strikes reached `strikesmax` | find the cause (bad share? wrong key version?) then request `resetsuspen` |
 | `missing required authority` / `transaction declares authority` on push | `rngops` not linked to that action, or `EOS_ORNG_PRIVATE_KEY` is not the `rngops` key | redo 1.1–1.2 |
+| `npm ci` → `EUSAGE`, `Missing: @waxio/wax-config@ from lock file` | the two private optional packages are not in the lockfile | use `npm install --ignore-scripts` (section 4) |
 | `tx_cpu_usage_exceeded`, `billed CPU time … greater than` | not enough CPU staked, or `EOS_ORNG_MAX_CPU` too low | stake more / raise the cap |
 | `combine failed (NO_VALID_SUBSET) … rejected parts [<idx>@…]` | another member's partial is bad | nothing on your side; the suspect `idx` is in the log and metric |
 | `combine_suspect_share` with **your** `idx` | your share no longer matches the active key | restart (the boot check will tell you); re-key if the key rotated |

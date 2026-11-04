@@ -1,3 +1,11 @@
+// `node index.js --check-config`: the dry run (scripts/check-config.js, same as
+// `npm run check:config`). Dispatched before anything of the service loads —
+// config, logger, pollers — so both entry points behave identically.
+if (process.argv.includes('--check-config')) {
+  require('./scripts/check-config').runCli();
+  return; // CommonJS module body: nothing below runs
+}
+
 require('dotenv').config();
 const cluster = require('cluster');
 const config = require('./lib/config/configLoader').loadConfig();
@@ -176,18 +184,6 @@ async function run() {
   });
 }
 
-if (process.argv.includes('--check-config')) {
-  // Dry run: validate the host and configuration without a share, start
-  // nothing, push nothing (scripts/check-config.js; `npm run check:config`).
-  require('./scripts/check-config')
-    .main()
-    .then(
-      code => process.exit(code),
-      err =>
-        fatal(`check-config failed: ${err && err.message ? err.message : err}`)
-    );
-} else {
-  run().catch(err =>
-    fatal(`Startup failed: ${err && err.stack ? err.stack : err}`)
-  );
-}
+run().catch(err =>
+  fatal(`Startup failed: ${err && err.stack ? err.stack : err}`)
+);

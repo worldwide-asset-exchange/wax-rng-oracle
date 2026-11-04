@@ -252,8 +252,11 @@ EXPRESS_APP_PORT=3000
 SLACK_WEBHOOK=<optional incoming-webhook URL>
 ```
 
-Before the ceremony, leave every `SHARE_KEY_*` value except the three numeric ones empty and
-run the dry run in section 4 (`npm run check:config`): it validates everything else now.
+Before the ceremony, set the four numeric `SHARE_KEY_*` variables now (`THRESHOLD`,
+`NUM_PARTIES`, `BITS`, `SHARE_INDEX`: your index is the position governance will give you) and
+leave the six key values (`PUBLIC_KEY_N`, `PUBLIC_KEY_E`, `PRIVATE_KEY_HEX`, `VERIFICATION_KEY`,
+`VERIFICATION_KEY_SHARE`, `VKU`) **unset**, not empty: an empty environment variable is ignored
+and the default (share index 1) would silently apply. Then run the dry run in section 4.
 
 Notes:
 
@@ -299,18 +302,32 @@ npm run check:config        # dry run: validates the host, the account and the c
 NODE_ENV=production node index.js
 ```
 
-**Dry run first.** `npm run check:config` (same as `node index.js --check-config`) reads the
-same configuration the service would and checks what can be checked without a share: `NODE_ENV`,
+**Dry run first.** `npm run check:config` (same as `node index.js --check-config`) checks what
+can be checked without a share: `NODE_ENV`,
 the shape of every variable, that `EOS_ORNG_PRIVATE_KEY` parses and its public key is on
 `<member>@<permission>` on chain, that the API node is reachable, synced and on the configured
 chain id, that `orng.wax` has an active key (it prints the fingerprint from section 2.4), whether
 `<member>` is in `oracles.a` and with which index, the account's CPU/NET headroom, and that
 `DB_FILE` is writable. With `SHARE_KEY_*` staged it also runs the share consistency check the boot
 self-check runs. It starts no poller and no HTTP API, pushes no transaction and prints no secret.
-Exit 0 means nothing it saw would stop the service; `FAIL` lines would. Before the ceremony,
+Exit 0 means nothing it saw would stop the service; `FAIL` lines would. Two `WARNING: NODE_ENV
+value of 'production' did not match …` lines on stderr are expected (there is no
+`config/production.json` by design; the service prints them too); the report is on stdout. Before the ceremony,
 `share.configured` is `skip` and `chain.oracleRow` is `warn` (not registered yet): that is the
 expected result of a ready host. `READONLY_MODE=true` is **not** a way to test earlier: the boot
 self-check runs before that switch is read and exits without a share.
+
+The dry run reads the shell environment and a `.env` in the working directory, not the unit's
+`EnvironmentFile`, and it probes `DB_FILE` as the user running it (it warns when that is root).
+Once the unit below is installed, run it exactly as the service would run, same user, same
+environment file, same sandbox:
+
+```bash
+systemd-run --pipe --wait --collect -p User=rng-oracle -p WorkingDirectory=/opt/wax-rng-oracle \
+  -p EnvironmentFile=/etc/wax-rng-oracle/member.env -p ProtectSystem=strict \
+  -p ReadWritePaths=/var/lib/wax-rng-oracle -E NODE_ENV=production \
+  /usr/bin/node index.js --check-config
+```
 
 Since 7.2.1 every dependency is on the public npm registry and pinned in the lockfile, so
 `npm ci` installs the exact tree. The `check:deps` line is the integrity check that matters.

@@ -456,6 +456,158 @@ describe('--check-config dry run', function() {
     });
   });
 
+  describe('accepts what the service accepts', () => {
+    it('13-character account names, EOS_ORNG_MAX_CPU=0, upper-case chain id', async () => {
+      const config = baseConfig();
+      config.eos.orng.contractName = 'abcdefghijkl1';
+      config.eos.orng.maxCpu = '0';
+      config.eos.chainId = CHAIN_ID.toUpperCase();
+      const report = await runConfigChecks({
+        config,
+        rpc: fakeRpc({ pubkeys: [pubkeyRow()] }),
+        env: ENV,
+        now: NOW,
+      });
+      expect(statusOf(report, 'config.accounts')).to.deep.equal(['ok']);
+      expect(statusOf(report, 'config.maxCpu')).to.deep.equal(['ok']);
+      expect(statusOf(report, 'config.chainId')).to.deep.equal(['ok']);
+      expect(statusOf(report, 'chain.chainId')).to.deep.equal(['ok']);
+    });
+
+    it('EOS_ORNG_MAX_CPU above 150 is a warning, a non-integer a failure', async () => {
+      const config = baseConfig();
+      config.eos.orng.maxCpu = '200';
+      let report = await runConfigChecks({
+        config,
+        rpc: fakeRpc({ pubkeys: [pubkeyRow()] }),
+        env: ENV,
+        now: NOW,
+      });
+      expect(statusOf(report, 'config.maxCpu')).to.deep.equal(['warn']);
+      config.eos.orng.maxCpu = 'lots';
+      report = await runConfigChecks({
+        config,
+        rpc: fakeRpc({ pubkeys: [pubkeyRow()] }),
+        env: ENV,
+        now: NOW,
+      });
+      expect(statusOf(report, 'config.maxCpu')).to.deep.equal(['fail']);
+    });
+
+    it('unlimited resources (-1) are not "little available"', async () => {
+      const account = {
+        permissions: [
+          {
+            perm_name: 'rngops',
+            parent: 'active',
+            required_auth: {
+              threshold: 1,
+              keys: [{ key: DEV_PUB_LEGACY, weight: 1 }],
+              accounts: [],
+            },
+          },
+        ],
+        cpu_limit: { used: -1, available: -1, max: -1 },
+        net_limit: { used: -1, available: -1, max: -1 },
+      };
+      const report = await runConfigChecks({
+        config: baseConfig(),
+        rpc: fakeRpc({ pubkeys: [pubkeyRow()], account }),
+        env: ENV,
+        now: NOW,
+      });
+      expect(statusOf(report, 'account.resources')).to.deep.equal(['ok']);
+      expect(byName(report, 'account.resources')[0].detail).to.include(
+        'unlimited'
+      );
+    });
+
+    it('a permission satisfied through delegated accounts is a warning, not a failure', async () => {
+      const account = {
+        permissions: [
+          {
+            perm_name: 'rngops',
+            parent: 'active',
+            required_auth: {
+              threshold: 1,
+              keys: [],
+              accounts: [
+                {
+                  permission: { actor: OWNER, permission: 'signer' },
+                  weight: 1,
+                },
+              ],
+            },
+          },
+        ],
+        cpu_limit: { available: 50000000 },
+        net_limit: { available: 1000000 },
+      };
+      const report = await runConfigChecks({
+        config: baseConfig(),
+        rpc: fakeRpc({ pubkeys: [pubkeyRow()], account }),
+        env: ENV,
+        now: NOW,
+      });
+      expect(statusOf(report, 'account.permission')).to.deep.equal(['warn']);
+    });
+
+    it('rows missing on a lagging node are a warning, not a failure', async () => {
+      const report = await runConfigChecks({
+        config: baseConfig(),
+        rpc: fakeRpc({ activeVer: null, headAgeSeconds: 400 }),
+        env: ENV,
+        now: NOW,
+      });
+      expect(statusOf(report, 'chain.rpc')).to.deep.equal(['warn']);
+      expect(statusOf(report, 'chain.activeKey')).to.deep.equal(['warn']);
+      expect(statusOf(report, 'chain.oracleRow')).to.deep.equal(['warn']);
+      expect(report.passed).to.equal(true);
+    });
+
+    it('rows missing on a synced node are failures', async () => {
+      const report = await runConfigChecks({
+        config: baseConfig(),
+        rpc: fakeRpc({ activeVer: null }),
+        env: ENV,
+        now: NOW,
+      });
+      expect(statusOf(report, 'chain.activeKey')).to.deep.equal(['fail']);
+    });
+
+    it('head_block_time that already carries a zone still yields a lag', async () => {
+      const rpc = fakeRpc({ pubkeys: [pubkeyRow()], headAgeSeconds: 100 });
+      const plain = rpc.get_info;
+      rpc.get_info = async () => {
+        const info = await plain();
+        return { ...info, head_block_time: `${info.head_block_time}Z` };
+      };
+      const report = await runConfigChecks({
+        config: baseConfig(),
+        rpc,
+        env: ENV,
+        now: NOW,
+      });
+      expect(statusOf(report, 'chain.rpc')).to.deep.equal(['warn']);
+      expect(byName(report, 'chain.rpc')[0].detail).to.include('100 s');
+    });
+
+    it('fetch failures print the cause', async () => {
+      const err = new Error('fetch failed');
+      err.cause = Object.assign(
+        new Error('getaddrinfo ENOTFOUND wax.example.net'),
+        { code: 'ENOTFOUND' }
+      );
+      const report = await runConfigChecks({
+        config: baseConfig(),
+        rpc: fakeRpc({ getInfoError: err }),
+        env: ENV,
+        now: NOW,
+      });
+      expect(byName(report, 'chain.rpc')[0].detail).to.include('ENOTFOUND');
+    });
+  });
+
   describe('helpers', () => {
     it('derivePublicKey gives both spellings', () => {
       const pub = derivePublicKey(DEV_WIF);

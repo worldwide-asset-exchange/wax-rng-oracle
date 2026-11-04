@@ -289,21 +289,17 @@ Two secrets exist: the key share (`SHARE_KEY_PRIVATE_KEY_HEX`) and the signing k
 
 ```bash
 git clone https://github.com/worldwide-asset-exchange/wax-rng-oracle.git /opt/wax-rng-oracle
-cd /opt/wax-rng-oracle && git checkout 7.2.0
-npm install --ignore-scripts
+cd /opt/wax-rng-oracle && git checkout 7.2.1
+npm ci --ignore-scripts
 npm run check:deps          # refuses a tree with node-forge < 1.4.0 or the signing library < 2.0.0
 NODE_ENV=production node index.js
 ```
 
-`npm install`, not `npm ci`: `package.json` lists two optional packages (`@waxio/wax-config`,
-`@waxio/fetch-retry`) that are published on a private registry and are therefore absent from the
-lockfile, and `npm ci` refuses a lockfile that does not list every optional dependency (`EUSAGE`,
-"Missing … from lock file"). `npm install` skips them with a warning, installs exactly the versions
-the lockfile pins for everything else, and the process runs without them (section 3.1). The
-`check:deps` line is the integrity check that matters.
+Since 7.2.1 every dependency is on the public npm registry and pinned in the lockfile, so
+`npm ci` installs the exact tree. The `check:deps` line is the integrity check that matters.
 
-No container image ships with this repository (there is no Dockerfile). Build your own if you
-want one; the three commands above are the whole build.
+`Dockerfile_eks` builds the same tree into a container image (`docker build -f Dockerfile_eks .`);
+it refuses a lockfile that resolves anything outside the public registry.
 
 systemd unit, non-root user, restart on any exit (the process exits 1 on every fatal condition
 on purpose, so `Restart=always` is what makes a mis-keyed member visible as a crash loop):
@@ -360,7 +356,7 @@ journalctl -u wax-rng-oracle -f
 
 ### 6.1 Upgrades
 
-Upgrade **one member at a time**: stop, `git checkout <tag>`, `npm install --ignore-scripts`,
+Upgrade **one member at a time**: stop, `git checkout <tag>`, `npm ci --ignore-scripts`,
 `npm run check:deps`, start, confirm `bootCheck.ok` is `true` and partials are being submitted,
 then move to the next member. Two members down at once is no 2-of-3 quorum: the RNG stalls.
 
@@ -455,7 +451,6 @@ Boot self-check codes appear in `Refusing to start: boot self-check failed (<cod
 | `Oracle <member> is unknown` at runtime | removed by a later `setoracles` | ask governance |
 | `Oracle <member> is suspended` | strikes reached `strikesmax` | find the cause (bad share? wrong key version?) then request `resetsuspen` |
 | `missing required authority` / `transaction declares authority` on push | `rngops` not linked to that action, or `EOS_ORNG_PRIVATE_KEY` is not the `rngops` key | redo 1.1–1.2 |
-| `npm ci` → `EUSAGE`, `Missing: @waxio/wax-config@ from lock file` | the two private optional packages are not in the lockfile | use `npm install --ignore-scripts` (section 4) |
 | `tx_cpu_usage_exceeded`, `billed CPU time … greater than` | not enough CPU staked, or `EOS_ORNG_MAX_CPU` too low | stake more / raise the cap |
 | `combine failed (NO_VALID_SUBSET) … rejected parts [<idx>@…]` | another member's partial is bad | nothing on your side; the suspect `idx` is in the log and metric |
 | `combine_suspect_share` with **your** `idx` | your share no longer matches the active key | restart (the boot check will tell you); re-key if the key rotated |

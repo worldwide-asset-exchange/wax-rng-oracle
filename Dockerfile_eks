@@ -1,0 +1,32 @@
+# wax-rng-oracle — container image for an orng.wax threshold signing member.
+# A headless outbound worker plus a small Express health API on :3000 (/health-check, /version).
+# All keys and config arrive at runtime through the environment — NOTHING secret is baked into this
+# image. One image serves every member; each member runs it with its own environment.
+FROM node:20-bookworm
+
+WORKDIR /opt/wax-rng-oracle
+
+# Every dependency comes from the public npm registry. Refuse a lockfile that resolves anything
+# elsewhere, so a private registry can never creep back into the build unnoticed.
+COPY package.json package-lock.json ./
+RUN node -e "const p=require('./package-lock.json').packages;const bad=Object.entries(p).filter(([k,v])=>v.resolved&&!v.resolved.startsWith('https://registry.npmjs.org/'));if(bad.length){console.error('non-public resolved URLs:',bad.map(([k])=>k).join(', '));process.exit(1)}" \
+ && npm ci --registry=https://registry.npmjs.org/
+
+# Dependency floors for the custody path (node-forge >= 1.4.0, rsa-threshold-signatures >= 2.0.0):
+# an image that regressed them is unbuildable rather than merely wrong.
+COPY scripts ./scripts
+RUN node scripts/check-dep-floors.js
+
+COPY . .
+RUN npm run build
+
+# Baked in on purpose, AFTER `npm ci` / `npm run build` (both need devDependencies). With this line an
+# image started without NODE_ENV can never load config/test.json; index.js also refuses NODE_ENV=test.
+ENV NODE_ENV=production
+
+# The forked workers create their ephemeral retry-bookkeeping db in the working directory.
+RUN chown node:node /opt/wax-rng-oracle
+
+EXPOSE 3000
+USER node
+CMD ["node", "index.js"]

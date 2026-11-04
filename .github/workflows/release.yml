@@ -1,0 +1,91 @@
+# Release: an X.Y.Z tag (the GitHub release tag, unprefixed) builds the container image and pushes it.
+#
+#   tag X.Y.Z    dependency floors + lint + unit tests, then build Dockerfile_eks and push
+#                <ECR_REGISTRY>/<ECR_REPOSITORY>:vX.Y.Z. The run summary prints the digest.
+#
+# Deployment is NOT automatic. The maintainers pin the printed digest into their deployment one
+# signing member at a time, and promote the next member only after the previous one passes its
+# boot self-check (/health-check bootCheck.ok) and signs on chain.
+#
+# Repository settings (the image job is skipped when AWS_ROLE_ARN is unset, e.g. in a fork):
+#   variable  AWS_ROLE_ARN     IAM role assumed through GitHub OIDC; it trusts tag runs of this repo only
+#   variable  AWS_REGION       registry region (default: us-east-2)
+#   variable  ECR_REGISTRY     <account>.dkr.ecr.<region>.amazonaws.com
+#   variable  ECR_REPOSITORY   image repository
+#   environment `production`   required reviewers approve the push
+name: release
+
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Tag matches package.json version
+        run: |
+          v="$(node -p "require('./package.json').version")"
+          [ "$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != package.json $v"; exit 1; }
+      - run: npm ci --registry=https://registry.npmjs.org/
+      - run: npm run check:deps
+      - run: npm run lint
+      - run: npm run test:unit
+
+  image:
+    needs: verify
+    if: vars.AWS_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC -> AWS
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-2' }}
+      ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+      ECR_REPO: ${{ vars.ECR_REPOSITORY }}
+      IMAGE_TAG: v${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        run: |
+          set -euo pipefail
+          IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+          if aws ecr describe-images --repository-name "$ECR_REPO" --image-ids imageTag="$IMAGE_TAG" >/dev/null 2>&1; then
+            echo "::error::${IMAGE} already exists; cut a new version."
+            exit 1
+          fi
+          docker build -f Dockerfile_eks -t "$IMAGE" .
+          docker push "$IMAGE"
+          DIGEST=$(aws ecr describe-images --repository-name "$ECR_REPO" --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageDigest' --output text)
+          {
+            echo "### wax-rng-oracle ${GITHUB_REF_NAME} (image ${IMAGE_TAG})"
+            echo
+            echo "Built from ${GITHUB_SHA}. Pin per member, one member at a time:"
+            echo
+            echo '```yaml'
+            echo "image:"
+            echo "  tag: \"${IMAGE_TAG}\""
+            echo "  digest: \"${DIGEST}\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

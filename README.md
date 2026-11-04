@@ -114,15 +114,15 @@ resolved. `NODE_ENV=local3 CLUSTER_MODE=true node index.js` runs one member in c
   combine is parked until the on-chain parts change instead of being retried identically. The Slack
   alert for combine failures is throttled to one per minute (with a suppressed count).
 - **Dependency floors.** `npm run check:deps` fails if any installed copy of `node-forge` is below
-  1.4.0 or of `@waxio/rsa-threshold-signatures` below 2.0.0. It runs in the GitHub workflow and in
-  the maintainers' image pipeline.
+  1.4.0 or of `@waxio/rsa-threshold-signatures` below 2.0.0. It runs in CI and in the release
+  workflow, and again inside the image build.
 
 ## Versioning
 
-`package.json` `version` is the GitHub release tag (unprefixed, e.g. `7.1.4` → `7.2.0`); bump it
+`package.json` `version` is the GitHub release tag (unprefixed, e.g. `7.2.0` → `7.2.1`); bump it
 in the same change that earns it, record it in `CHANGELOG.md`, and `/version` echoes it. The
-production container image is built from a release tag by the maintainers' pipeline; no Dockerfile
-ships in this repository (see the operator guide, section 4, for building your own).
+production container image is built from the release tag by this repository's release workflow
+(`Dockerfile_eks`). **How to release: [`RELEASING.md`](RELEASING.md).**
 
 ## Run the application
 

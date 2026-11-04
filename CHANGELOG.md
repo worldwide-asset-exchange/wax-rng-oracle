@@ -2,8 +2,8 @@
 
 All notable changes to `wax-rng-oracle` (the `orng.wax` 2-of-3 threshold member process) are
 documented here. Releases are tags on GitHub (`worldwide-asset-exchange/wax-rng-oracle`, unprefixed
-`X.Y.Z`); the production container image is built from the release tag by the maintainers' image
-pipeline and deployed by digest.
+`X.Y.Z`); since 7.2.1 the production container image is built from the release tag by this
+repository's release workflow and deployed by digest.
 
 ## Version scheme (decided in WBP-2067, corrected 2026-10-29)
 
@@ -12,6 +12,24 @@ The application version follows the **GitHub repository** (`worldwide-asset-exch
 change that earns it; `/version` echoes it. The maintainers' image pipeline only builds the
 production image: it tags its build `v` + the app version (`v7.2.0` builds `7.2.0`), so the release
 tag and the image tag carry one number. The image digest remains the real identity of what deploys.
+
+## 7.2.1 — 2026-11-04
+
+Build-only release: the application logic is unchanged from 7.2.0.
+
+- **No private registry.** The two optional internal packages are gone from `package.json`; every
+  dependency is on the public npm registry and pinned in the lockfile (903 entries, no version,
+  integrity or URL changed). `npm ci` works again.
+- **`lib/config/fetchRetry.js` carries the chain-RPC retry semantics itself** — the ones the
+  production image ran through the internal package: `maxTry` total attempts (default 5), a 5 s
+  abort per attempt, non-2xx retried except on the last attempt, retries only for `ECONNRESET` /
+  `ETIMEDOUT` / `ECONNREFUSED` / `ENOTFOUND` or a timeout, a `100·i` ms pause, and
+  `request <url> timeout` when the last attempt timed out. Before this, a build without the internal
+  package fell back to a wrapper with **no timeout**, so a hung RPC connection could stall a member.
+  Unit-tested (`test/fetch-retry.test.js`); the `X-WAX-Source` header test now always runs.
+- **The production image is built here.** `Dockerfile_eks` and `.github/workflows/release.yml`: a
+  release tag runs the floors, lint and unit tests, then builds and pushes the image (tag `v` + the
+  version). Deployment stays manual and one member at a time.
 
 ## 7.2.0 — 2026-10-29 (GitHub tag `7.2.0` on `9f0ea8c`)
 

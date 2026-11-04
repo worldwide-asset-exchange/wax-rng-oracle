@@ -1,0 +1,62 @@
+# .dockerignore for the wax-rng-oracle image.
+# COPY honours THIS file, not .gitignore — so anything key-shaped must be excluded HERE
+# or it gets baked into the image layers and is extractable from the registry.
+#
+# INVARIANT: the image bakes NO secrets. Real keys/config arrive ONLY at runtime through
+# the environment (config/custom-environment-variables.json maps it over default.json).
+# Keep ONLY those two config files; exclude every dev/test config that carries mnemonics,
+# RSA threshold private shares, or chain keys.
+#
+# IMPORTANT: Docker's .dockerignore parser supports ONLY full-line `#` comments — an inline
+# / trailing comment is taken as part of the pattern and silently neuters it. Keep every
+# comment on its own line.
+
+# VCS / CI / editor / docs (history can carry rotated key material; none needed at runtime)
+.git
+.gitignore
+.gitlab-ci.yml
+.github
+.idea
+*.md
+docs
+Dockerfile*
+.dockerignore
+
+# Deps + build/test/coverage artifacts (deps reinstalled via npm ci; build runs in-image)
+node_modules
+.nyc_output
+coverage
+public
+benchmark/log
+test
+/local_test
+db*.json
+testdb*.json
+
+# CUSTODY: key-shaped material — NEVER copy into the image.
+# config/local{1,2,3}.json: local-dev chain configs (mnemonics + RSA shares + EOS WIFs)
+config/local*.json
+# config/test.json: test fixture (EOS WIF + threshold share)
+config/test.json
+# config/threshold-keys-test.json: aggregated RSA threshold private shares
+config/threshold-keys-test.json
+# resources/: holds rsa_4096_priv.pem (real key, only .gitignore-protected)
+resources/
+.env
+
+# NOTE: intentionally NOT excluded (required at build/runtime):
+#   config/default.json, config/custom-environment-variables.json  (runtime config + env mapping)
+#   index.js, lib/, webpack.config.js, package.json, package-lock.json  (app + build)
+# Every dependency installs from the public npm registry (Dockerfile_eks refuses anything else).
+
+# Not needed in the image; the benchmark scripts carry a dev-chain key literal.
+benchmark/
+# Local-only files that .gitignore covers but COPY would not (a working-tree build).
+*.pem
+.npmrc
+.env.*
+terraform/
+packages/
+*.tgz
+.venv/
+junk/

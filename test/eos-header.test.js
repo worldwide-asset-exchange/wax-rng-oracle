@@ -3,21 +3,8 @@ const nock = require('nock');
 const config = require('../lib/config/configLoader').loadConfig();
 const { eosRpc } = require('../lib/config/eos');
 
-// Check if @waxio/fetch-retry is available
-let hasWaxioFetchRetry = false;
-try {
-  require('@waxio/fetch-retry');
-  hasWaxioFetchRetry = true;
-} catch (err) {
-  // Not available, will skip related tests
-}
-
 describe('EOS RPC Headers', function() {
   it('Should include X-WAX-Source header in requests', async function() {
-    if (!hasWaxioFetchRetry) {
-      this.skip(); // Skip test when @waxio/fetch-retry is not available
-    }
-
     this.timeout(10000);
 
     let requestHeaders;

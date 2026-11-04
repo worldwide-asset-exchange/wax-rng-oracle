@@ -12,7 +12,11 @@
 #   variable  AWS_REGION       registry region (default: us-east-2)
 #   variable  ECR_REGISTRY     <account>.dkr.ecr.<region>.amazonaws.com
 #   variable  ECR_REPOSITORY   image repository
-#   environment `production`   required reviewers approve the push
+#   environment `production`   required reviewers approve the push; deployment policy: X.Y.Z tags only.
+#                              The AWS role trusts this environment's OIDC subject, so the environment
+#                              (with the tag ruleset: only admins create/move/delete tags) is the gate.
+#                              Reviewers: approve only when GITHUB_SHA is on main.
+# Actions are pinned to full commit SHAs (the image job holds id-token: write).
 name: release
 
 on:
@@ -30,8 +34,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
       - name: Tag matches package.json version
@@ -57,18 +63,23 @@ jobs:
       ECR_REPO: ${{ vars.ECR_REPOSITORY }}
       IMAGE_TAG: v${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
 
       - name: Build and push
         run: |
           set -euo pipefail
+          echo "::add-mask::${ECR_REGISTRY}"
+          git fetch --no-tags --depth=200 origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD || { echo "::error::${GITHUB_SHA} is not on main"; exit 1; }
           IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
           if aws ecr describe-images --repository-name "$ECR_REPO" --image-ids imageTag="$IMAGE_TAG" >/dev/null 2>&1; then
             echo "::error::${IMAGE} already exists; cut a new version."

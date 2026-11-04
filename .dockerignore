@@ -48,3 +48,15 @@ resources/
 #   config/default.json, config/custom-environment-variables.json  (runtime config + env mapping)
 #   index.js, lib/, webpack.config.js, package.json, package-lock.json  (app + build)
 # Every dependency installs from the public npm registry (Dockerfile_eks refuses anything else).
+
+# Not needed in the image; the benchmark scripts carry a dev-chain key literal.
+benchmark/
+# Local-only files that .gitignore covers but COPY would not (a working-tree build).
+*.pem
+.npmrc
+.env.*
+terraform/
+packages/
+*.tgz
+.venv/
+junk/

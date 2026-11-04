@@ -2,7 +2,9 @@
 # A headless outbound worker plus a small Express health API on :3000 (/health-check, /version).
 # All keys and config arrive at runtime through the environment — NOTHING secret is baked into this
 # image. One image serves every member; each member runs it with its own environment.
-FROM node:20-bookworm
+# Pinned by digest (node:20-bookworm, 2026-04-22). Node 20 is end-of-life: moving to a supported
+# line is tracked separately (mocha 6 in the test suite does not run on Node >= 23).
+FROM node:20-bookworm@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5
 
 WORKDIR /opt/wax-rng-oracle
 

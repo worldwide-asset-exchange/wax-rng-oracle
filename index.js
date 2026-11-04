@@ -176,6 +176,18 @@ async function run() {
   });
 }
 
-run().catch(err =>
-  fatal(`Startup failed: ${err && err.stack ? err.stack : err}`)
-);
+if (process.argv.includes('--check-config')) {
+  // Dry run: validate the host and configuration without a share, start
+  // nothing, push nothing (scripts/check-config.js; `npm run check:config`).
+  require('./scripts/check-config')
+    .main()
+    .then(
+      code => process.exit(code),
+      err =>
+        fatal(`check-config failed: ${err && err.message ? err.message : err}`)
+    );
+} else {
+  run().catch(err =>
+    fatal(`Startup failed: ${err && err.stack ? err.stack : err}`)
+  );
+}

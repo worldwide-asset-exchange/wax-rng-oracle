@@ -47,7 +47,7 @@ Placeholders are in angle brackets. Nothing in this document is a real key or sh
 - A reliable WAX API node (`<api-url>`): the process polls `reqs` several times a second and
   pushes transactions. Run your own node or contract one you trust; a lagging or lying node can
   only make the member stop or refuse to start, never sign under a wrong key, but it costs requests.
-- WAX mainnet chain id: `1064487b3cd1a897ce03ae5b6a865651747e2e152090f99c1d19d44e01aec5a4`.
+- WAX mainnet chain id: `1064487b3cd1a897ce03ae5b6a865651747e2e152090f99c1d19d44e01aea5a4`.
 - `cleos` (or any Antelope CLI) for the account steps.
 - `git`, `npm`.
 
@@ -230,7 +230,7 @@ Minimal mainnet member:
 
 ```bash
 NODE_ENV=production
-EOS_CHAIN_ID=1064487b3cd1a897ce03ae5b6a865651747e2e152090f99c1d19d44e01aec5a4
+EOS_CHAIN_ID=1064487b3cd1a897ce03ae5b6a865651747e2e152090f99c1d19d44e01aea5a4
 EOS_API_URL=<api-url>
 EOS_ORNG_CONTRACT_NAME=orng.wax
 EOS_ORNG_NODE_OWNER=<member>
@@ -251,6 +251,9 @@ LOGGER_LEVEL=info
 EXPRESS_APP_PORT=3000
 SLACK_WEBHOOK=<optional incoming-webhook URL>
 ```
+
+Before the ceremony, leave every `SHARE_KEY_*` value except the three numeric ones empty and
+run the dry run in section 4 (`npm run check:config`): it validates everything else now.
 
 Notes:
 
@@ -292,8 +295,22 @@ git clone https://github.com/worldwide-asset-exchange/wax-rng-oracle.git /opt/wa
 cd /opt/wax-rng-oracle && git checkout 7.2.1
 npm ci --ignore-scripts
 npm run check:deps          # refuses a tree with node-forge < 1.4.0 or the signing library < 2.0.0
+npm run check:config        # dry run: validates the host, the account and the chain, starts nothing
 NODE_ENV=production node index.js
 ```
+
+**Dry run first.** `npm run check:config` (same as `node index.js --check-config`) reads the
+same configuration the service would and checks what can be checked without a share: `NODE_ENV`,
+the shape of every variable, that `EOS_ORNG_PRIVATE_KEY` parses and its public key is on
+`<member>@<permission>` on chain, that the API node is reachable, synced and on the configured
+chain id, that `orng.wax` has an active key (it prints the fingerprint from section 2.4), whether
+`<member>` is in `oracles.a` and with which index, the account's CPU/NET headroom, and that
+`DB_FILE` is writable. With `SHARE_KEY_*` staged it also runs the share consistency check the boot
+self-check runs. It starts no poller and no HTTP API, pushes no transaction and prints no secret.
+Exit 0 means nothing it saw would stop the service; `FAIL` lines would. Before the ceremony,
+`share.configured` is `skip` and `chain.oracleRow` is `warn` (not registered yet): that is the
+expected result of a ready host. `READONLY_MODE=true` is **not** a way to test earlier: the boot
+self-check runs before that switch is read and exits without a share.
 
 Since 7.2.1 every dependency is on the public npm registry and pinned in the lockfile, so
 `npm ci` installs the exact tree. The `check:deps` line is the integrity check that matters.
@@ -337,6 +354,8 @@ journalctl -u wax-rng-oracle -f
 
 ## 5. Verify
 
+0. **Dry run clean.** `npm run check:config` exits 0 with no `FAIL` line (section 4). After the
+   ceremony and `setoracles`, `share.consistent` and `chain.oracleRow` must both be `ok`.
 1. **Boot self-check passed.** The first lines must include `Boot self-check passed: <member>
    share index <i> is consistent with on-chain pubkeys[<ver>] (4096-bit modulus) and oracles.a`,
    then `Application: Worker <pid> started`. The check reads `config.a[activever]` → `pubkeys[ver]`
@@ -442,6 +461,7 @@ Boot self-check codes appear in `Refusing to start: boot self-check failed (<cod
 | `ORACLE_NOT_REGISTERED` | `<member>` not in `oracles.a` (or `EOS_ORNG_NODE_OWNER` wrong) | check the variable; ask governance for `setoracles` |
 | `ORACLE_INDEX_MISMATCH` | `SHARE_KEY_SHARE_INDEX` ≠ your `oracle_index` | set the variable to the on-chain index; make sure the share you hold is for that index |
 | `SHARE_CONFIG_UNPARSEABLE` | a `SHARE_KEY_*` value or the on-chain modulus is not hex | re-copy the values; check for `0x`, whitespace, truncation |
+| any `FAIL` line from `npm run check:config` | the named variable, key, permission, node or path is wrong | the line says which; fix it and re-run before starting the service |
 | `expectedPublicKey` | your `n`/`e` differ from `pubkeys[ver]` | compare fingerprints (2.4); you may hold a share of a previous key |
 | `verificationKeyShare`, `shareIndex` | share does not bind to `v_i` / wrong index for this share | wrong slice of the dealer output; go back to the ceremony operator |
 | `modulusBits`, `sharedKeyRange`, `verificationKeyRange`, `verificationKeyShareRange`, `vkuRange`, `vkuJacobi`, `exponentPrime`, `exponentAboveParties`, `thresholdRange`, `shareIndexRange` | a parameter is out of range or `SHARE_KEY_BITS` / `_THRESHOLD` / `_NUM_PARTIES` are wrong | check the three numeric variables first |

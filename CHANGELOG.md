@@ -13,6 +13,19 @@ change that earns it; `/version` echoes it. The maintainers' image pipeline only
 production image: it tags its build `v` + the app version (`v7.2.0` builds `7.2.0`), so the release
 tag and the image tag carry one number. The image digest remains the real identity of what deploys.
 
+## 7.3.0 — unreleased
+
+- **`--check-config` dry run** (`npm run check:config`, `node index.js --check-config`). Validates a
+  member host before the key ceremony, when the fail-closed boot self-check cannot run: runtime,
+  configuration shape, the signing key and its presence on `<member>@<permission>`, API node
+  reachability, sync and chain id, the contract's active key (fingerprint printed), the `oracles.a`
+  row and index, CPU/NET headroom, `DB_FILE` writability; with `SHARE_KEY_*` staged, the same share
+  consistency check the boot path runs. Starts nothing, pushes nothing, prints no secret; exit 0
+  when nothing would stop the service. `lib/checkConfig.js`, `scripts/check-config.js`,
+  `test/check-config.test.js`; operator guide sections 3, 4, 5 and 7.
+- **Operator guide: mainnet chain id corrected** (Prerequisites and the section 3 example ended in
+  `…aec5a4`; the chain reports `…aea5a4`). Found by the first live `--check-config` run.
+
 ## 7.2.1 — 2026-11-04
 
 Build-only release: the application logic is unchanged from 7.2.0.

@@ -1,14 +1,15 @@
 {
   "name": "wax-rng-oracle",
-  "version": "7.2.1",
+  "version": "7.3.0",
   "description": "Random number generator oracle for the WAX network",
   "main": "index.js",
   "license": "MIT",
   "scripts": {
     "build": "webpack --mode development",
     "test": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/*.js",
-    "test:unit": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/eos-header.test.js test/fetch-retry.test.js test/get-health-check-api.test.js test/get-version.test.js test/shuffle.test.js test/is-true.test.js test/config-loader.test.js test/combine-partials.test.js test/boot-checks.test.js test/storage.test.js test/check-dep-floors.test.js",
+    "test:unit": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/eos-header.test.js test/fetch-retry.test.js test/get-health-check-api.test.js test/get-version.test.js test/shuffle.test.js test/is-true.test.js test/config-loader.test.js test/combine-partials.test.js test/boot-checks.test.js test/storage.test.js test/check-dep-floors.test.js test/check-config.test.js",
     "check:deps": "node scripts/check-dep-floors.js",
+    "check:config": "node scripts/check-config.js",
     "test:integration": "LOG_LEVEL=none NODE_ENV=test mocha --exit test/get-jobs-api.test.js test/jobService.test.js test/jobService.collision.test.js test/poller.test.js",
     "coverage": "LOG_LEVEL=none NODE_ENV=test nyc mocha --exit test/*.js",
     "start": "npm run build && node index.js",

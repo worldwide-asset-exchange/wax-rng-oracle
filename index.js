@@ -1,3 +1,11 @@
+// `node index.js --check-config`: the dry run (scripts/check-config.js, same as
+// `npm run check:config`). Dispatched before anything of the service loads —
+// config, logger, pollers — so both entry points behave identically.
+if (process.argv.includes('--check-config')) {
+  require('./scripts/check-config').runCli();
+  return; // CommonJS module body: nothing below runs
+}
+
 require('dotenv').config();
 const cluster = require('cluster');
 const config = require('./lib/config/configLoader').loadConfig();

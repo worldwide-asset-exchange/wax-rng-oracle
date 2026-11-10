@@ -2,7 +2,7 @@
 
 This guide takes a WAX block producer from a fresh account to a running member of the
 `orng.wax` 2-of-3 threshold-RSA oracle: a member that passes the boot self-check, signs
-partials, combines, and claims its stipend. It is written against `wax-rng-oracle` **7.2.0**,
+partials, combines, and claims its stipend. It is written against `wax-rng-oracle` **7.3.0**,
 contract `orng.wax` **v3.4.0** and signing library `@waxio/rsa-threshold-signatures` **2.0.0**.
 Every action, table and variable named here exists in that code.
 
@@ -95,8 +95,10 @@ October–November 2026 (peaks near 0.1/s), so a single process is a few percent
   request per second sustained and has the working-directory caveat in section 3.
 - **Dedicated host**: the signing path is not constant-time (above), so a VM or bare-metal host you
   control, not a container on a host shared with tenants you do not.
-- **No active-active**: never run two live processes on the same share index; the second one only
-  produces `duplicate part` rejections. A warm standby is `READONLY_MODE=true` (section 3).
+- **Redundancy**: two live processes on the same share index, on separate hosts, is the designed
+  per-member redundancy. The contract keeps the first partial and the process treats the second's
+  `duplicate part` as a known collision, so it is a race, not a fault (section 6.6). A warm standby
+  is `READONLY_MODE=true` (section 3).
 
 ## 1. Account and permissions
 
@@ -271,7 +273,7 @@ Notes:
   ids). Workers write `db-<n>.json` into the **working directory**, so it is incompatible with the
   unit in section 4 as written (`ProtectSystem=strict` makes `/opt/wax-rng-oracle` read-only); if
   you need it, set `WorkingDirectory=/var/lib/wax-rng-oracle`. Start with `false`.
-  `READONLY_MODE=true` serves the API only and signs nothing (a boot-checked standby).
+  `READONLY_MODE=true` serves the API only and signs nothing (a boot-checked warm standby, 6.6).
 
 ### 3.1 Custody
 
@@ -382,7 +384,8 @@ journalctl -u wax-rng-oracle -f
 2. **Health endpoint.** `curl -s localhost:3000/health-check` returns HTTP 200 and
    `{"healthy":true,"eos":true,"bootCheck":{"ran":true,"ok":true,"rpcReachable":true,
    "activeKeyFound":true,"oracleIndexMatches":true,"shareConsistent":true,"activeVer":<ver>}}`;
-   500 whenever the RPC is down or the boot check did not pass. `/version` returns `{"version":"7.2.0"}`.
+   500 whenever the RPC is down or the boot check did not pass (what it does and does not prove:
+   6.4). `/version` returns `{"version":"<the tag you checked out>"}`.
 3. **Signing.** Within a minute of a request, `cleos get table orng.wax orng.wax reqs` shows your
    index in a row's `parts`; the log shows `Submitting partial signature for request <id>` and
    `Process job. Success: 1, Fail: 0`. Winning a combine logs `Execute job. Success: 1, Fail: 0`.
@@ -432,13 +435,29 @@ cleos -u <api-url> push action orng.wax claim '["<member>"]' -p <member>@active
 
 ### 6.4 Monitoring
 
+**HTTP endpoints** (`EXPRESS_APP_PORT`, default 3000; the server listens on all interfaces, so
+firewall the port or put it behind a reverse proxy that does the access control):
+
+| Path | Returns | Status |
+| --- | --- | --- |
+| `/health-check` | `{"healthy","eos","bootCheck":{"ran","ok","rpcReachable","activeKeyFound","oracleIndexMatches","shareConsistent","activeVer"}}` — booleans and the key version, never key material | 200 when `eos` and `bootCheck.ok` are both true, else 500 |
+| `/version` | `{"version":"X.Y.Z"}` from `package.json` | 200 |
+| `/jobs`, `/jobs/<id>` | this process's own back-off / parking state (`DB_FILE`), not the chain | 200 |
+
+`/health-check` is a liveness check: the process is up, its API node answers `get_info` right now,
+and the share matched the on-chain key **when the process booted**. It proves nothing about
+signing. A member whose `rngops` key was changed after boot, whose node is minutes behind head, or
+that is losing every race to its twin (6.6) still returns 200. Signing health is only visible on
+chain (below). Use the endpoint for the unit's restart logic and the standby test, not as the only
+alarm.
+
 StatsD metrics (`METRICS_HOST:METRICS_PORT`, prefix `METRICS_PREFIX`, default `wax-rng-oracle`):
 
 | Metric | Type | Meaning |
 | --- | --- | --- |
 | `set_rand_heart_beat`, `execute_heart_beat`, `retry_deliver_heart_beat`, `cleanup_heart_beat` | gauge | each poll loop is alive |
 | `seeds_to_be_send_loaded`, `seeds_to_execute_loaded`, `undelivered_jobs_loaded`, `seeds_pending` | gauge | queue depths seen on chain |
-| `seeds_sent`, `set_part_failed`, `job_collision` (tag `contract`) | counter | partials submitted / failed / already present |
+| `seeds_sent`, `set_part_failed`, `job_collision` (tag `contract`) | counter | partials submitted / failed / already on chain from your other instance (6.6) |
 | `executed_job`, `execute_failed`, `markfail_failed` (tag `contract`) | counter | combines delivered / failed / `markfailed` itself failed |
 | `combine_failed` (tags `contract`, `code`) | counter | parts on chain did not combine; `code` is the library's `CombineError` code |
 | `combine_rejected_part`, `combine_suspect_share` (tags `contract`, `idx`) | counter | a specific member's partial was malformed / only in failing subsets — `idx` names the suspect |
@@ -446,9 +465,24 @@ StatsD metrics (`METRICS_HOST:METRICS_PORT`, prefix `METRICS_PREFIX`, default `w
 | `retry_deliver_success`, `retry_deliver_failed` (tag `dapp`), `cleanup_success`, `cleanup_failed` | counter | delivery retries and cleanup |
 | `eos.response_time.get_seeds_to_be_send`, `…get_job_to_execute`, `…get_undelivered_to_retry` | timing | RPC latency |
 
-Alert on: any heart-beat gauge stale for a minute; `combine_suspect_share` with your own `idx`;
-`key_version_skipped` > 0; `seeds_pending` ≥ `JOB_PENDING_ALERT_MAX_JOB_PENDING`; `/health-check`
-not 200; `oracles.a.strikes` increasing.
+**Host-side alerts** (from the metrics and the endpoint): any heart-beat gauge stale for a minute;
+`/health-check` not 200; `combine_suspect_share` with your own `idx`; `key_version_skipped` > 0;
+`seeds_pending` ≥ `JOB_PENDING_ALERT_MAX_JOB_PENDING`; the unit restarting more than a few times
+an hour (`systemctl show -p NRestarts wax-rng-oracle`).
+
+**Chain-side checks** are the only ones that prove you are signing. Run them from outside the
+host, against a history API or your own node, on a schedule:
+
+- Your `submitpart` count over the last hour is close to the number of `requestrand` on `orng.wax`
+  in the same hour. On a Hyperion-style history API:
+  `/v2/history/get_actions?account=orng.wax&filter=orng.wax:submitpart&act.authorization.actor=<member>&after=<iso-time>&limit=1`
+  and read `total.value`. A flat count while the contract is busy means you are not signing,
+  whatever `/health-check` says.
+- `cleos get table orng.wax orng.wax reqs` is near empty most of the time. Rows older than a minute
+  mean fewer than two members are signing — a service problem, not only yours.
+- `oracles.a` shows `strikes: 0, suspended: false` for you (6.3).
+- Running active-active: `job_collision` on each instance stays near half the request rate. It
+  dropping to zero on one instance means the other one is dead (6.6).
 
 With `SLACK_WEBHOOK` set the process posts `RNG poller ERROR` (a `submitpart` failed), `RNG poller
 execute ERROR`, `RNG poller markfailed ERROR`, `RNG poller combine ERROR` (throttled to one a minute
@@ -465,6 +499,44 @@ with a suppressed count), `RNG retry deliver ERROR`, `RNG cleanup ERROR` and `RN
   failed on and not retried until the on-chain parts change. Any other execute or delivery failure
   backs off from 500 ms, doubling, up to `2^JOB_RETRY_MAX_RETRIES × 500 ms` (default 4 s), then
   stops. Entries clear once the row leaves the chain. `DB_FILE` holds only this back-off state.
+
+### 6.6 Redundancy
+
+The service survives one member being down (2-of-3), so nothing is lost while you fix a host. For
+your own member, pick one of three models:
+
+| Model | What runs | Cost | Failover |
+| --- | --- | --- | --- |
+| **Restart only** | one live process under `Restart=always` (section 4) | none | automatic for a crash; none for a dead host |
+| **Active-active** (the design) | two live processes with the same share and index, on separate hosts | one rejected transaction per request from the loser | none needed; fix the dead one |
+| **Warm standby** | one live, one `READONLY_MODE=true` | none | by hand: stop the primary, flip the flag, restart |
+
+**Active-active is a race, not a fault.** Both instances poll `reqs`, both compute the partial, both
+push `submitpart`. The contract stores the first and rejects the second with `duplicate part`; the
+process logs `Job <id> is already processed`, counts `job_collision`, and drops it — no retry, no
+Slack alert, no `markfailed`. The same happens on `setrand` (`no request found` once the twin has
+delivered). A duplicate never strikes you: strikes are for invalid full signatures only (6.3). The
+rejected transaction is refused by the API node and never reaches the chain, so it is not billed
+to your account. Requirements:
+
+- Separate hosts and separate `DB_FILE`s. The back-off state is per process; never share one file.
+- Identical `SHARE_KEY_*`, `SHARE_KEY_SHARE_INDEX`, `EOS_ORNG_NODE_OWNER` and signing key. The two
+  instances may use the same API node or different ones.
+- Subjective billing. nodeos does not bill API-pushed rejections to the account by default
+  (`disable-subjective-api-billing = true`). If a node you push through has that set to `false`,
+  thousands of `duplicate part` rejections a day accumulate against `<member>` on that node and
+  both instances stall there with `tx_cpu_usage_exceeded` while the chain shows CPU to spare. Add
+  `disable-subjective-account-billing = <member>` to that node's `config.ini`, or push through a
+  node with the default. Do not run active-active through a public API node you do not control.
+- Expect `job_collision` at roughly half the request rate on each instance.
+
+**Warm standby** boots fully (share self-check against the chain included), serves `/health-check`
+and signs nothing. Keep its environment identical except `READONLY_MODE=true`, restart it after
+every key rotation (6.2) so its boot check re-verifies the new share, and promote it by flipping the
+flag and restarting. Stopping the primary first avoids the collision cost; it is safe either way.
+
+**Cluster mode** (`CLUSTER_MODE=true`) is not redundancy: it shards request ids across workers in
+one process on one host, and one worker dying takes the whole process down by design.
 
 ## 7. Troubleshooting
 
@@ -489,6 +561,7 @@ Boot self-check codes appear in `Refusing to start: boot self-check failed (<cod
 | `Oracle <member> is suspended` | strikes reached `strikesmax` | find the cause (bad share? wrong key version?) then request `resetsuspen` |
 | `missing required authority` / `transaction declares authority` on push | `rngops` not linked to that action, or `EOS_ORNG_PRIVATE_KEY` is not the `rngops` key | redo 1.1–1.2 |
 | `tx_cpu_usage_exceeded`, `billed CPU time … greater than` | not enough CPU staked, or `EOS_ORNG_MAX_CPU` too low | stake more / raise the cap |
+| `tx_cpu_usage_exceeded` from one node only, `get_account` shows CPU to spare, two live instances | that node subjectively bills the loser's rejected transactions (6.6) | `disable-subjective-account-billing = <member>` on that node, or push through a node with the default |
 | `combine failed (NO_VALID_SUBSET) … rejected parts [<idx>@…]` | another member's partial is bad | nothing on your side; the suspect `idx` is in the log and metric |
 | `combine_suspect_share` with **your** `idx` | your share no longer matches the active key | restart (the boot check will tell you); re-key if the key rotated |
 | `Contract is paused` / `/health-check` 500 with `eos:false` | governance paused `orng.wax` / RPC unreachable now | wait / fix the node; the poller keeps retrying |
@@ -524,7 +597,7 @@ Everything below is mapped in `config/custom-environment-variables.json`; defaul
 | `JOB_RETRY_MAX_RETRIES` | `jobRetry.maxRetries` | `3` | execute / delivery back-off budget (`2^n × 500 ms`) | no |
 | `JOB_PENDING_ALERT_MAX_JOB_PENDING` | `jobPendingAlert.maxJobPending` | `100` | Slack alert threshold on pending requests | no |
 | `DB_FILE` | `db.file` | `db.json` | lowdb state file (relative to the working directory) | recommended |
-| `READONLY_MODE` | `readOnlyMode` | `false` | API only, no signing | no |
+| `READONLY_MODE` | `readOnlyMode` | `false` | API only, no signing (warm standby, 6.6) | no |
 | `CLUSTER_MODE` | `clusterMode` | `false` | one worker per CPU | no |
 | `EXPRESS_APP_ENABLE` | `expressApp.enable` | `true` | serve `/health-check`, `/version`, `/jobs` | no |
 | `EXPRESS_APP_PORT` | `expressApp.port` | `3000` | HTTP port | no |

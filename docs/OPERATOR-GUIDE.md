@@ -338,7 +338,12 @@ Since 7.2.1 every dependency is on the public npm registry and pinned in the loc
 it refuses a lockfile that resolves anything outside the public registry.
 
 systemd unit, non-root user, restart on any exit (the process exits 1 on every fatal condition
-on purpose, so `Restart=always` is what makes a mis-keyed member visible as a crash loop):
+on purpose, so `Restart=always` is what makes a mis-keyed member visible as a crash loop).
+`StartLimitIntervalSec=0` keeps that loop running indefinitely: a member staged before a key
+switch (6.2) restarts 5 s after every exit for as long as the switch takes, and must never be
+stopped by systemd's start-rate limit (with `RestartSec=5` plus the boot check's own run time the
+default limit of 5 starts in 10 s cannot trip, but do not make the design depend on that
+arithmetic):
 
 ```ini
 # /etc/systemd/system/wax-rng-oracle.service
@@ -346,6 +351,7 @@ on purpose, so `Restart=always` is what makes a mis-keyed member visible as a cr
 Description=WAX ORNG signing member (<member>)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 User=rng-oracle
@@ -399,17 +405,42 @@ Upgrade **one member at a time**: stop, `git checkout <tag>`, `npm ci --ignore-s
 `npm run check:deps`, start, confirm `bootCheck.ok` is `true` and partials are being submitted,
 then move to the next member. Two members down at once is no 2-of-3 quorum: the RNG stalls.
 
-### 6.2 Key rotation
+### 6.2 Key rotation and member changes
 
 A member signs only the key version the boot self-check verified (`activeVer`). When the
 producers execute `setpubkey(<ver+1>, e, n)` it activates immediately: new requests carry
 `ver+1`, running members log
 `Request <id> carries key version <ver+1> but this member verified its share against version <ver>
 — skipping every request of that version until restarted and re-checked` once and count
-`key_version_skipped`. So a rotation is: new ceremony (section 2) → every member installs its new
-share → `setpubkey` → every member restarts. Restarted members skip any request still carrying the
-old version; those need governance attention (`killjobs`), and `retirepubkey(<ver>)` closes the old
-key afterwards. Coordinate the timing with the governance runbook so the gap is minutes, not hours.
+`key_version_skipped`. There is no staged key: a process cannot pass the boot check against a
+version the chain does not have yet. So you do not wait for the switch and then start — you start
+first and let the boot check wait for the switch:
+
+1. **Stage.** Receive your share from the new ceremony (section 2) and write the new environment:
+   the new `SHARE_KEY_*` values, `SHARE_KEY_SHARE_INDEX` = the index the ceremony operator gave
+   you, your account in `EOS_ORNG_NODE_OWNER`. `npm run check:config` passes everything but the
+   comparison with the chain.
+2. **Start now.** The process fails the boot check — `ORACLE_NOT_REGISTERED` if your account is
+   new to `oracles.a`, `ORACLE_INDEX_MISMATCH` if your index changes, `expectedPublicKey` if you
+   keep your index and only the key changes — exits 1, and systemd restarts it 5 s later for as
+   long as the switch takes (`StartLimitIntervalSec=0`, section 4). This is the expected state: it signs nothing, pushes nothing and costs nothing.
+   Re-keying an existing member: run the new-share process as a **second instance** beside the
+   old one — its own `DB_FILE`, `EXPRESS_APP_PORT` and `METRICS_PORT`, otherwise the 6.6 shape —
+   so the old one keeps signing the old version until the switch.
+3. **The switch happens without you.** The producers execute `setpubkey`, `setoracles` and the
+   un-pause in one transaction after a request pause of a few seconds (governance runbook 5.1).
+   Your next restart passes (`Boot self-check passed … pubkeys[<ver+1>]`) and you sign the first
+   new request within seconds. There is nothing to do at switch time and no window to be awake
+   for.
+4. **Afterwards.** Stop the old instance if you ran one: it now skips every request
+   (`key_version_skipped` counts them), or logs `Oracle <member> is unknown` if that account left
+   the set. A warm standby staged the same way (6.6) is already live; one you did not stage needs
+   its new share and a restart. Confirm `/health-check` shows
+   `activeVer: <ver+1>` and `oracleIndexMatches: true`, and that `submitpart` from your account
+   appears on chain (6.4).
+
+A request still carrying the old version after the switch is governance's to clear (`killjobs`);
+`retirepubkey(<ver>)` closes the old key afterwards. Neither needs anything from you.
 
 ### 6.3 Strikes, suspension, claims
 
@@ -531,9 +562,9 @@ to your account. Requirements:
 - Expect `job_collision` at roughly half the request rate on each instance.
 
 **Warm standby** boots fully (share self-check against the chain included), serves `/health-check`
-and signs nothing. Keep its environment identical except `READONLY_MODE=true`, restart it after
-every key rotation (6.2) so its boot check re-verifies the new share, and promote it by flipping the
-flag and restarting. Stopping the primary first avoids the collision cost; it is safe either way.
+and signs nothing. Keep its environment identical except `READONLY_MODE=true`; before a key switch
+stage and start it like the primary (6.2), so both go live on the same restart; promote it by
+flipping the flag and restarting. Stopping the primary first avoids the collision cost; it is safe either way.
 
 **Cluster mode** (`CLUSTER_MODE=true`) is not redundancy: it shards request ids across workers in
 one process on one host, and one worker dying takes the whole process down by design.
@@ -547,11 +578,11 @@ Boot self-check codes appear in `Refusing to start: boot self-check failed (<cod
 | `RPC_UNREACHABLE` | `EOS_API_URL` down or wrong for the whole retry budget (default 6 attempts, ≈ 1 min) | fix the URL / node; raise `BOOT_CHECK_RPC_RETRIES` on slow starts |
 | `ACTIVE_VERSION_MISSING`, `ACTIVE_KEY_MISSING` | `config.a[activever]` / `pubkeys[ver]` not visible — node replaying, or contract not yet keyed | wait or point at a synced node; check `config.a` yourself |
 | `ACTIVE_VERSION_INVALID`, `ACTIVE_KEY_MALFORMED`, `ORACLE_INDEX_MALFORMED`, `ACTIVE_KEY_RETIRED` | chain row present but unusable / active key retired | governance issue; report it, wait for the next `setpubkey`, re-key |
-| `ORACLE_NOT_REGISTERED` | `<member>` not in `oracles.a` (or `EOS_ORNG_NODE_OWNER` wrong) | check the variable; ask governance for `setoracles` |
-| `ORACLE_INDEX_MISMATCH` | `SHARE_KEY_SHARE_INDEX` ≠ your `oracle_index` | set the variable to the on-chain index; make sure the share you hold is for that index |
+| `ORACLE_NOT_REGISTERED` | `<member>` not in `oracles.a` (or `EOS_ORNG_NODE_OWNER` wrong) | check the variable; ask governance for `setoracles`. Before a planned switch this is the expected crash loop (6.2) — leave it running |
+| `ORACLE_INDEX_MISMATCH` | `SHARE_KEY_SHARE_INDEX` ≠ your `oracle_index` | set the variable to the on-chain index; make sure the share you hold is for that index. Before a planned switch that moves your index, this is the expected crash loop (6.2) — leave it running |
 | `SHARE_CONFIG_UNPARSEABLE` | a `SHARE_KEY_*` value or the on-chain modulus is not hex | re-copy the values; check for `0x`, whitespace, truncation |
 | any `FAIL` line from `npm run check:config` | the named variable, key, permission, node or path is wrong | the line says which; fix it and re-run before starting the service |
-| `expectedPublicKey` | your `n`/`e` differ from `pubkeys[ver]` | compare fingerprints (2.4); you may hold a share of a previous key |
+| `expectedPublicKey` | your `n`/`e` differ from `pubkeys[ver]` | compare fingerprints (2.4); you may hold a share of a previous key. Before a planned switch, with the new share loaded, this is the expected crash loop (6.2) — leave it running |
 | `verificationKeyShare`, `shareIndex` | share does not bind to `v_i` / wrong index for this share | wrong slice of the dealer output; go back to the ceremony operator |
 | `modulusBits`, `sharedKeyRange`, `verificationKeyRange`, `verificationKeyShareRange`, `vkuRange`, `vkuJacobi`, `exponentPrime`, `exponentAboveParties`, `thresholdRange`, `shareIndexRange` | a parameter is out of range or `SHARE_KEY_BITS` / `_THRESHOLD` / `_NUM_PARTIES` are wrong | check the three numeric variables first |
 | `NODE_ENV=test is reserved…` | `NODE_ENV=test` | use `production` |

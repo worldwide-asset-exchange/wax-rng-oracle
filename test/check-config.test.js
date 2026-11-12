@@ -13,6 +13,7 @@ const {
   formatReport,
   fingerprintModulus,
   derivePublicKey,
+  parseProposalArg,
 } = require('../lib/checkConfig');
 
 const CHAIN_ID =
@@ -84,6 +85,7 @@ function fakeRpc({
   oracles = [],
   account,
   getInfoError,
+  proposals = {}, // proposer → [{ proposal_name, packed_transaction }]
 } = {}) {
   const rows = {
     'config.a':
@@ -126,8 +128,16 @@ function fakeRpc({
       );
     }),
     get_table_rows: sinon.stub().callsFake(async params => {
+      if (params.code === 'eosio.msig') {
+        expect(params.table).to.equal('proposal');
+        const mine = (proposals[params.scope] || []).filter(
+          r => r.proposal_name === params.lower_bound
+        );
+        return { rows: mine, more: false };
+      }
       expect(params.code).to.equal(CONTRACT);
       const all = rows[params.table] || [];
+      if (params.lower_bound === undefined) return { rows: all, more: false };
       return {
         rows: all.filter(
           r => String(r[keyField[params.table]]) === String(params.lower_bound)
@@ -453,6 +463,434 @@ describe('--check-config dry run', function() {
       ]) {
         expect(text, f).to.not.include(keySet.members[0][f].slice(0, 16));
       }
+    });
+  });
+
+  describe('--proposal: the pending eosio.msig switch', () => {
+    const PROPOSER = 'admin2.wax';
+    const NAME = 'rng.switch';
+    const NEW_LIST = ['eosphereiobp', OWNER, 'waxswedenorg'];
+    const act = (name, data) => ({
+      account: CONTRACT,
+      name,
+      authorization: [{ actor: CONTRACT, permission: 'active' }],
+      data,
+    });
+    // A decoded switch transaction built around the test key set (keySet =
+    // the proposed key, `old` = what the chain still carries).
+    const switchTrx = ({
+      modulus = keySet.publicKey.n,
+      exponent = '10001',
+      version = 2,
+      oracles = NEW_LIST,
+      expiration = '2026-11-11T12:00:00.000',
+      tail = [act('pauserequest', { paused: false })],
+      extra = [],
+    } = {}) => ({
+      expiration,
+      actions: [
+        act('setstipend', { oracle: 'rng1.wax', active: false }),
+        act('setpubkey', { version, exponent, modulus }),
+        act('setoracles', { oracles }),
+        ...extra,
+        ...tail,
+      ],
+    });
+    const PACKED = 'deadbeef';
+    const rpcWith = (decoded, more = {}) =>
+      fakeRpc({
+        pubkeys: more.pubkeys || [],
+        oracles: more.oracles || [],
+        headAgeSeconds: more.headAgeSeconds,
+        proposals: {
+          [PROPOSER]: [{ proposal_name: NAME, packed_transaction: PACKED }],
+        },
+      });
+    const run = (config, decoded, more = {}) =>
+      runConfigChecks({
+        config,
+        rpc: rpcWith(decoded, more),
+        env: ENV,
+        now: NOW,
+        proposal: { proposer: PROPOSER, name: NAME },
+        decodeTransaction: async packed => {
+          expect(packed).to.equal(PACKED);
+          return decoded;
+        },
+      });
+    const withShare = (i, bits = '1024') => {
+      const config = baseConfig();
+      config.shareKey = {
+        ...config.shareKey,
+        bits,
+        shareIndex: String(i),
+        ...keySet.members[i - 1],
+      };
+      return config;
+    };
+    let old;
+    let third; // a key nobody holds a share of and the chain does not carry
+    before(async () => {
+      old = await generateKeySet();
+      third = await generateKeySet();
+    });
+    const oldRow = () => ({
+      ver: 1,
+      modulus: old.publicKey.n,
+      exponent: old.publicKey.e,
+      retired: false,
+    });
+
+    it('a correctly staged member passes: share matches the proposed key, chain mismatch is a warning', async () => {
+      const report = await run(withShare(2), switchTrx(), {
+        pubkeys: [oldRow()],
+      });
+      expect(report.passed, JSON.stringify(report.checks)).to.equal(true);
+      expect(statusOf(report, 'proposal.found')).to.deep.equal(['ok']);
+      expect(statusOf(report, 'proposal.actions')).to.deep.equal(['ok']);
+      expect(statusOf(report, 'proposal.setpubkey')).to.deep.equal(['ok']);
+      expect(byName(report, 'proposal.setpubkey')[0].detail).to.include(
+        fingerprintModulus(keySet.publicKey.n)
+      );
+      expect(statusOf(report, 'proposal.setoracles')).to.deep.equal(['ok']);
+      expect(statusOf(report, 'proposal.unpause')).to.deep.equal(['ok']);
+      expect(statusOf(report, 'share.consistent')).to.deep.equal(['warn']);
+      expect(byName(report, 'share.consistent')[0].detail).to.include(
+        'pubkeys[2]'
+      );
+      expect(statusOf(report, 'share.consistentProposed')).to.deep.equal([
+        'ok',
+      ]);
+      expect(statusOf(report, 'chain.oracleRow')).to.deep.equal(['warn']);
+    });
+
+    it('without the proposal the same member still fails share.consistent (unchanged behaviour)', async () => {
+      const report = await runConfigChecks({
+        config: withShare(2),
+        rpc: fakeRpc({ pubkeys: [oldRow()] }),
+        env: ENV,
+        now: NOW,
+      });
+      expect(statusOf(report, 'share.consistent')).to.deep.equal(['fail']);
+      expect(byName(report, 'proposal.found')).to.have.length(0);
+      expect(byName(report, 'share.consistentProposed')).to.have.length(0);
+    });
+
+    it('a share for a different key than the proposed one fails both comparisons', async () => {
+      const report = await run(
+        withShare(2),
+        switchTrx({ modulus: third.publicKey.n }),
+        {
+          pubkeys: [oldRow()],
+        }
+      );
+      expect(statusOf(report, 'proposal.setpubkey')).to.deep.equal(['fail']);
+      expect(byName(report, 'proposal.setpubkey')[0].detail).to.include(
+        'different key'
+      );
+      expect(statusOf(report, 'share.consistentProposed')).to.deep.equal([
+        'fail',
+      ]);
+      // the staged share matches neither the chain key nor the proposed one
+      expect(statusOf(report, 'share.consistent')).to.deep.equal(['fail']);
+      expect(report.passed).to.equal(false);
+    });
+
+    it('wrong index: the account is in the proposed list at another position', async () => {
+      const report = await run(withShare(1), switchTrx(), {
+        pubkeys: [oldRow()],
+      });
+      expect(statusOf(report, 'proposal.setoracles')).to.deep.equal(['fail']);
+      expect(byName(report, 'proposal.setoracles')[0].detail).to.include(
+        'position 2'
+      );
+      expect(report.passed).to.equal(false);
+    });
+
+    it('account missing from the proposed list', async () => {
+      const report = await run(
+        withShare(2),
+        switchTrx({
+          oracles: ['eosphereiobp', 'ivote4waxusa', 'waxswedenorg'],
+        }),
+        { pubkeys: [oldRow()] }
+      );
+      expect(statusOf(report, 'proposal.setoracles')).to.deep.equal(['fail']);
+      expect(byName(report, 'proposal.setoracles')[0].detail).to.include(
+        'not in the proposed list'
+      );
+    });
+
+    it('no share staged: the proposal is described, the comparison skipped', async () => {
+      const config = baseConfig();
+      config.shareKey.shareIndex = '2';
+      config.shareKey.bits = '1024'; // the test key; a size mismatch is a failure
+      const report = await run(config, switchTrx(), { pubkeys: [oldRow()] });
+      expect(statusOf(report, 'proposal.setpubkey')).to.deep.equal(['skip']);
+      expect(byName(report, 'proposal.setpubkey')[0].detail).to.include(
+        fingerprintModulus(keySet.publicKey.n)
+      );
+      expect(statusOf(report, 'proposal.setoracles')).to.deep.equal(['ok']);
+      expect(byName(report, 'share.consistentProposed')).to.have.length(0);
+      expect(report.passed, JSON.stringify(report.checks)).to.equal(true);
+    });
+
+    it('missing proposal is a failure and nothing else is reported about it', async () => {
+      const report = await runConfigChecks({
+        config: withShare(2),
+        rpc: fakeRpc({ pubkeys: [oldRow()] }),
+        env: ENV,
+        now: NOW,
+        proposal: { proposer: PROPOSER, name: 'rng.other' },
+        decodeTransaction: async () => {
+          throw new Error('must not be called');
+        },
+      });
+      expect(statusOf(report, 'proposal.found')).to.deep.equal(['fail']);
+      expect(byName(report, 'proposal.found')[0].detail).to.include(
+        'rng.other'
+      );
+      expect(byName(report, 'proposal.setpubkey')).to.have.length(0);
+      expect(statusOf(report, 'share.consistent')).to.deep.equal(['fail']);
+    });
+
+    it('expired proposal is a failure', async () => {
+      const report = await run(
+        withShare(2),
+        switchTrx({ expiration: '2026-11-04T11:59:59.000' }),
+        { pubkeys: [oldRow()] }
+      );
+      expect(statusOf(report, 'proposal.found')).to.deep.equal(['fail']);
+      expect(byName(report, 'proposal.found')[0].detail).to.include('expired');
+    });
+
+    it('decode failure is a failure that names the cause', async () => {
+      const report = await runConfigChecks({
+        config: withShare(2),
+        rpc: rpcWith(null, { pubkeys: [oldRow()] }),
+        env: ENV,
+        now: NOW,
+        proposal: { proposer: PROPOSER, name: NAME },
+        decodeTransaction: async () => {
+          throw new Error('abi not found');
+        },
+      });
+      expect(statusOf(report, 'proposal.found')).to.deep.equal(['fail']);
+      expect(byName(report, 'proposal.found')[0].detail).to.include(
+        'abi not found'
+      );
+    });
+
+    it('an action on another contract fails the proposal', async () => {
+      const report = await run(
+        withShare(2),
+        switchTrx({
+          extra: [
+            {
+              account: 'eosio.token',
+              name: 'transfer',
+              authorization: [],
+              data: {},
+            },
+          ],
+        }),
+        { pubkeys: [oldRow()] }
+      );
+      expect(statusOf(report, 'proposal.actions')).to.deep.equal(['fail']);
+      expect(byName(report, 'proposal.actions')[0].detail).to.include(
+        'eosio.token::transfer'
+      );
+    });
+
+    it('bad setpubkey shapes fail: exponent, upper-case hex, size', async () => {
+      for (const bad of [
+        { exponent: '3' },
+        { modulus: keySet.publicKey.n.toUpperCase() },
+        { modulus: keySet.publicKey.n.slice(2) },
+      ]) {
+        const report = await run(withShare(2), switchTrx(bad), {
+          pubkeys: [oldRow()],
+        });
+        expect(
+          statusOf(report, 'proposal.setpubkey'),
+          JSON.stringify(bad).slice(0, 40)
+        ).to.deep.equal(['fail']);
+      }
+    });
+
+    it('a proposal that does not end with pauserequest(false) is a warning', async () => {
+      const report = await run(withShare(2), switchTrx({ tail: [] }), {
+        pubkeys: [oldRow()],
+      });
+      expect(statusOf(report, 'proposal.unpause')).to.deep.equal(['warn']);
+      expect(report.passed, JSON.stringify(report.checks)).to.equal(true);
+    });
+
+    it('never echoes share material with the proposal checks on', async () => {
+      const report = await run(withShare(2), switchTrx(), {
+        pubkeys: [oldRow()],
+      });
+      const text = formatReport(report) + JSON.stringify(report.checks);
+      for (const f of ['sharedKey', 'verificationKeyShare', 'vku']) {
+        expect(text, f).to.not.include(keySet.members[1][f].slice(0, 16));
+      }
+    });
+
+    it('an existing member whose index moves: chain.oracleRow becomes a warning', async () => {
+      const report = await run(withShare(2), switchTrx(), {
+        pubkeys: [oldRow()],
+        oracles: [{ oracle: OWNER, oracle_index: 1, strikes: 0, suspended: 0 }],
+      });
+      expect(statusOf(report, 'chain.oracleRow')).to.deep.equal(['warn']);
+      expect(byName(report, 'chain.oracleRow')[0].detail).to.include(
+        'ORACLE_INDEX_MISMATCH'
+      );
+      expect(report.passed, JSON.stringify(report.checks)).to.equal(true);
+    });
+
+    it('an index that matches neither the chain nor the proposal stays a failure', async () => {
+      const report = await run(withShare(3), switchTrx(), {
+        pubkeys: [oldRow()],
+        oracles: [{ oracle: OWNER, oracle_index: 1, strikes: 0, suspended: 0 }],
+      });
+      expect(statusOf(report, 'chain.oracleRow')).to.deep.equal(['fail']);
+      expect(statusOf(report, 'proposal.setoracles')).to.deep.equal(['fail']);
+    });
+
+    it('key-only proposal: fine for a member registered at its index, a failure otherwise', async () => {
+      const noOracles = switchTrx();
+      noOracles.actions = noOracles.actions.filter(
+        a => a.name !== 'setoracles'
+      );
+      const registered = await run(withShare(2), noOracles, {
+        pubkeys: [oldRow()],
+        oracles: [{ oracle: OWNER, oracle_index: 2, strikes: 0, suspended: 0 }],
+      });
+      expect(statusOf(registered, 'proposal.setoracles')).to.deep.equal([
+        'warn',
+      ]);
+      expect(registered.passed, JSON.stringify(registered.checks)).to.equal(
+        true
+      );
+      const unregistered = await run(withShare(2), noOracles, {
+        pubkeys: [oldRow()],
+      });
+      expect(statusOf(unregistered, 'proposal.setoracles')).to.deep.equal([
+        'fail',
+      ]);
+      expect(byName(unregistered, 'proposal.setoracles')[0].detail).to.include(
+        'not in oracles.a'
+      );
+    });
+
+    it('setpubkey must be the next version and a new modulus', async () => {
+      const wrongVer = await run(withShare(2), switchTrx({ version: 3 }), {
+        pubkeys: [oldRow()],
+      });
+      expect(statusOf(wrongVer, 'proposal.setpubkey')).to.deep.equal(['fail']);
+      expect(byName(wrongVer, 'proposal.setpubkey')[0].detail).to.include(
+        'requires 2'
+      );
+      const reinstall = await run(
+        withShare(2),
+        switchTrx({ modulus: old.publicKey.n }),
+        { pubkeys: [oldRow()] }
+      );
+      expect(byName(reinstall, 'proposal.setpubkey')[0].detail).to.include(
+        'already installed as pubkeys[1]'
+      );
+      // the highest version counts, retired or not
+      const retiredHigher = await run(withShare(2), switchTrx({ version: 2 }), {
+        pubkeys: [
+          oldRow(),
+          { ...oldRow(), ver: 3, retired: true, modulus: 'ab' },
+        ],
+      });
+      expect(byName(retiredHigher, 'proposal.setpubkey')[0].detail).to.include(
+        'requires 4'
+      );
+    });
+
+    it('setoracles list must have numParties distinct members', async () => {
+      const four = await run(
+        withShare(2),
+        switchTrx({ oracles: [...NEW_LIST, 'fourth.wax'] }),
+        { pubkeys: [oldRow()] }
+      );
+      expect(statusOf(four, 'proposal.setoracles')).to.deep.equal(['fail']);
+      expect(byName(four, 'proposal.setoracles')[0].detail).to.include(
+        'does not fit'
+      );
+      const dup = await run(
+        withShare(2),
+        switchTrx({ oracles: ['eosphereiobp', OWNER, OWNER] }),
+        { pubkeys: [oldRow()] }
+      );
+      expect(byName(dup, 'proposal.setoracles')[0].detail).to.include('twice');
+    });
+
+    it('an action not authorised by the contract, or not decodable, fails proposal.actions', async () => {
+      const trx = switchTrx();
+      trx.actions[1].authorization = [
+        { actor: 'admin2.wax', permission: 'active' },
+      ];
+      const unauth = await run(withShare(2), trx, { pubkeys: [oldRow()] });
+      expect(statusOf(unauth, 'proposal.actions')).to.deep.equal(['fail']);
+      expect(byName(unauth, 'proposal.actions')[0].detail).to.include(
+        'not authorised by orng.wax: orng.wax::setpubkey'
+      );
+      expect(byName(unauth, 'proposal.setpubkey')).to.have.length(0);
+      const trx2 = switchTrx();
+      trx2.actions[0].decodeError = 'abi missing';
+      const undec = await run(withShare(2), trx2, { pubkeys: [oldRow()] });
+      expect(byName(undec, 'proposal.actions')[0].detail).to.include(
+        'abi missing'
+      );
+    });
+
+    it('a missing proposal on a lagging node is a warning', async () => {
+      const report = await runConfigChecks({
+        config: withShare(2),
+        rpc: fakeRpc({ pubkeys: [oldRow()], headAgeSeconds: 400 }),
+        env: ENV,
+        now: NOW,
+        proposal: { proposer: PROPOSER, name: NAME },
+        decodeTransaction: async () => {
+          throw new Error('must not be called');
+        },
+      });
+      expect(statusOf(report, 'proposal.found')).to.deep.equal(['warn']);
+      expect(byName(report, 'proposal.found')[0].detail).to.include('lagging');
+    });
+
+    it('parseProposalArg: a blank CHECK_PROPOSAL means unset', () => {
+      expect(parseProposalArg([], { CHECK_PROPOSAL: '' })).to.equal(null);
+      expect(parseProposalArg([], { CHECK_PROPOSAL: '  ' })).to.equal(null);
+    });
+
+    it('parseProposalArg: flag, flag=value, env, none, malformed', () => {
+      expect(
+        parseProposalArg(['--proposal', 'admin2.wax/rng.switch'], {})
+      ).to.deep.equal({
+        proposer: 'admin2.wax',
+        name: 'rng.switch',
+      });
+      expect(
+        parseProposalArg(
+          ['--check-config', '--proposal=admin2.wax/rng.switch'],
+          {}
+        )
+      ).to.deep.equal({ proposer: 'admin2.wax', name: 'rng.switch' });
+      expect(
+        parseProposalArg([], { CHECK_PROPOSAL: 'admin2.wax/rng.switch' })
+      ).to.deep.equal({ proposer: 'admin2.wax', name: 'rng.switch' });
+      expect(parseProposalArg(['--check-config'], {})).to.equal(null);
+      for (const bad of ['rng.switch', 'Admin/rng.switch', 'a/b/c', '--x']) {
+        expect(() => parseProposalArg(['--proposal', bad], {}), bad).to.throw(
+          /proposer\/name/
+        );
+      }
+      expect(parseProposalArg(['--proposal'], {})).to.equal(null); // no value = unset
     });
   });
 

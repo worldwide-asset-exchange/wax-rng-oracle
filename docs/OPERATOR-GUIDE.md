@@ -2,7 +2,7 @@
 
 This guide takes a WAX block producer from a fresh account to a running member of the
 `orng.wax` 2-of-3 threshold-RSA oracle: a member that passes the boot self-check, signs
-partials, combines, and claims its stipend. It is written against `wax-rng-oracle` **7.3.0**,
+partials, combines, and claims its stipend. It is written against `wax-rng-oracle` **7.4.0**,
 contract `orng.wax` **v3.4.0** and signing library `@waxio/rsa-threshold-signatures` **2.0.0**.
 Every action, table and variable named here exists in that code.
 
@@ -334,6 +334,63 @@ systemd-run --pipe --wait --collect -p User=rng-oracle -p WorkingDirectory=/opt/
 Since 7.2.1 every dependency is on the public npm registry and pinned in the lockfile, so
 `npm ci` installs the exact tree. The `check:deps` line is the integrity check that matters.
 
+### 4.1 Validating a staged member before the switch
+
+A member staged for a planned key switch (6.2) sits in an `ORACLE_NOT_REGISTERED` (or
+`ORACLE_INDEX_MISMATCH` / `expectedPublicKey`) crash loop until the producers execute the switch.
+Reaching that line proves the configuration loaded, the share parsed and the API node answered.
+It does not prove the share belongs to the key being installed, that the index is the one the new
+member list gives you, or that the signing key is on your permission. Two read-only checks do.
+
+**1. The dry run, with the service's own environment.** `npm run check:config` from a shell sees
+the shell's environment and a `.env`, not the unit's `EnvironmentFile`; the `systemd-run` line
+above runs it exactly as the service runs (same user, same environment file, same sandbox). With
+the share staged and the switch not yet executed, the expected report is every line `ok` or `skip`
+except two:
+
+| Line | Expected before the switch | What it proves |
+| --- | --- | --- |
+| `share.parses` `ok … local fingerprint <64 hex>` | the fingerprint equals the one the ceremony operator gave you on the second channel (2.4) | the staged values are a consistent share of **that** key |
+| `account.permission` `ok <member>@rngops carries <key>` | | `EOS_ORNG_PRIVATE_KEY` is the `rngops` key |
+| `config.accounts`, `config.shareParams` | `<member>@rngops → orng.wax`, `… index <i>` | the account and index you configured are the ones you were given |
+| `chain.oracleRow` | **`warn`** — not in `oracles.a` yet (new member); **`FAIL`** `ORACLE_INDEX_MISMATCH` if you are an existing member whose index moves | expected until `setoracles`; the index case becomes a `warn` with `--proposal` below |
+| `share.consistent` | **`FAIL`** — does not match the active `pubkeys[<old ver>]`, with the note that a new key version looks like this | expected: your share is for the next key, not the current one |
+
+Any other `FAIL` is a real misconfiguration. Those expected lines are the ones the proposal
+check below turns into warnings once it can see what the switch will install. Keep both secrets in the root-owned, mode `0600`
+`EnvironmentFile` (3.1) rather than in `Environment=` lines of the unit: unit files are readable by
+every local user and `systemctl show -p Environment` prints their values.
+
+**2. Against the pending proposal.** Once the producers have proposed the switch
+(`eosio.msig`, usually days before they execute it — ask the ceremony operator for the proposer
+account and proposal name), add `--proposal <proposer>/<name>` (or set
+`CHECK_PROPOSAL=<proposer>/<name>`) to the same dry run:
+
+```bash
+systemd-run --pipe --wait --collect -p User=rng-oracle -p WorkingDirectory=/opt/wax-rng-oracle \
+  -p EnvironmentFile=/etc/wax-rng-oracle/member.env -p ProtectSystem=strict \
+  -p ReadWritePaths=/var/lib/wax-rng-oracle -E NODE_ENV=production \
+  /usr/bin/node index.js --check-config --proposal <proposer>/<name>
+```
+
+It reads the proposal row, decodes the packed transaction with the contract ABI the node serves,
+and adds:
+
+| Line | Meaning |
+| --- | --- |
+| `proposal.found` | the proposal exists and has not expired (action count, expiry) |
+| `proposal.actions` | every action is on `orng.wax`, authorised by it and decodable with its ABI; anything else is a `FAIL` |
+| `proposal.setpubkey` | the proposed key: version (must be the next `pubkeys` version, with a modulus not already installed), size, fingerprint; `ok` when it equals the fingerprint of your staged `SHARE_KEY_PUBLIC_KEY_N`, `FAIL` when your share is for a different key, `skip` (fingerprint printed) when no share is staged |
+| `proposal.setoracles` | the proposed member list has `SHARE_KEY_NUM_PARTIES` distinct members and your account is at position `SHARE_KEY_SHARE_INDEX`; `FAIL` names the position it is at, or that it is missing. A proposal without `setoracles` passes only if you are already registered at that index |
+| `proposal.unpause` | the transaction ends with `pauserequest(false)` (`warn` otherwise — the producers then un-pause separately) |
+| `share.consistentProposed` | the full share consistency check against the proposed modulus |
+
+When the share matches the proposed key, `share.consistent` becomes a `warn` ("does not match
+the active key but matches the proposed one") instead of a `FAIL`, and when the proposed list puts
+you at your configured index an `ORACLE_INDEX_MISMATCH` on `chain.oracleRow` becomes a `warn` too,
+so a correctly staged member **exits 0**. The proposal's fingerprint is also what the producers compare against the ceremony
+attestation before they approve; checking it from your own share is independent of both.
+
 `Dockerfile_eks` builds the same tree into a container image (`docker build -f Dockerfile_eks .`);
 it refuses a lockfile that resolves anything outside the public registry.
 
@@ -418,8 +475,9 @@ first and let the boot check wait for the switch:
 
 1. **Stage.** Receive your share from the new ceremony (section 2) and write the new environment:
    the new `SHARE_KEY_*` values, `SHARE_KEY_SHARE_INDEX` = the index the ceremony operator gave
-   you, your account in `EOS_ORNG_NODE_OWNER`. `npm run check:config` passes everything but the
-   comparison with the chain.
+   you, your account in `EOS_ORNG_NODE_OWNER`. Validate per 4.1: the dry run passes everything
+   but the comparison with the current chain key, and `--proposal` confirms the share and index
+   against the pending switch once it is proposed.
 2. **Start now.** The process fails the boot check — `ORACLE_NOT_REGISTERED` if your account is
    new to `oracles.a`, `ORACLE_INDEX_MISMATCH` if your index changes, `expectedPublicKey` if you
    keep your index and only the key changes — exits 1, and systemd restarts it 5 s later for as
@@ -582,6 +640,10 @@ Boot self-check codes appear in `Refusing to start: boot self-check failed (<cod
 | `ORACLE_INDEX_MISMATCH` | `SHARE_KEY_SHARE_INDEX` ≠ your `oracle_index` | set the variable to the on-chain index; make sure the share you hold is for that index. Before a planned switch that moves your index, this is the expected crash loop (6.2) — leave it running |
 | `SHARE_CONFIG_UNPARSEABLE` | a `SHARE_KEY_*` value or the on-chain modulus is not hex | re-copy the values; check for `0x`, whitespace, truncation |
 | any `FAIL` line from `npm run check:config` | the named variable, key, permission, node or path is wrong | the line says which; fix it and re-run before starting the service |
+| `FAIL share.consistent … does not match on-chain pubkeys[<ver>]` before a planned switch | your share is for the next key version | expected (4.1); re-run with `--proposal` once the switch is proposed — it becomes a `warn` when the share matches the proposed key |
+| `FAIL proposal.found` | wrong proposer or name, not proposed yet, already executed or cancelled, or expired | ask the ceremony operator for `<proposer>/<name>`; an expired proposal has to be re-proposed |
+| `FAIL proposal.setpubkey` (different key) / `FAIL share.consistentProposed` | the share you staged is not for the key the producers will install | compare fingerprints with the ceremony operator; you may hold the wrong member file or a share of an earlier ceremony |
+| `FAIL proposal.setoracles` | your account is at another position of the proposed list, or missing | set `SHARE_KEY_SHARE_INDEX` to the position the list gives you **only if** the share you hold is for that index; otherwise the proposal or your member file is wrong — stop and ask |
 | `expectedPublicKey` | your `n`/`e` differ from `pubkeys[ver]` | compare fingerprints (2.4); you may hold a share of a previous key. Before a planned switch, with the new share loaded, this is the expected crash loop (6.2) — leave it running |
 | `verificationKeyShare`, `shareIndex` | share does not bind to `v_i` / wrong index for this share | wrong slice of the dealer output; go back to the ceremony operator |
 | `modulusBits`, `sharedKeyRange`, `verificationKeyRange`, `verificationKeyShareRange`, `vkuRange`, `vkuJacobi`, `exponentPrime`, `exponentAboveParties`, `thresholdRange`, `shareIndexRange` | a parameter is out of range or `SHARE_KEY_BITS` / `_THRESHOLD` / `_NUM_PARTIES` are wrong | check the three numeric variables first |

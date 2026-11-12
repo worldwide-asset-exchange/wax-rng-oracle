@@ -13,7 +13,24 @@ change that earns it; `/version` echoes it. The maintainers' image pipeline only
 production image: it tags its build `v` + the app version (`v7.2.0` builds `7.2.0`), so the release
 tag and the image tag carry one number. The image digest remains the real identity of what deploys.
 
-## 7.3.0 — unreleased
+## 7.4.0 — unreleased
+
+- **`--check-config --proposal <proposer>/<name>`** (also `CHECK_PROPOSAL`): the dry run reads the
+  pending `eosio.msig` proposal that will switch the key and the member list, decodes it with the
+  contract ABI, and reports `proposal.found` / `proposal.actions` / `proposal.setpubkey` (version,
+  size, fingerprint vs the staged `SHARE_KEY_PUBLIC_KEY_N`) / `proposal.setoracles` (the account at
+  `SHARE_KEY_SHARE_INDEX`) / `proposal.unpause`, plus `share.consistentProposed`, the full share
+  consistency check against the proposed modulus. A share that does not match the active key but
+  matches the proposed one turns `share.consistent` into a warning, so a correctly staged member
+  exits 0 while it waits in its expected crash loop. `lib/checkConfig.js`, `scripts/check-config.js`,
+  `test/check-config.test.js`.
+- Operator guide 4.1 "Validating a staged member before the switch": the dry run through
+  `systemd-run` with the unit's `EnvironmentFile` (what a shell `npm run check:config` does not
+  see), the expected pre-switch report line by line, secrets in the 0600 environment file rather
+  than `Environment=` unit lines, and the `--proposal` check; 6.2 and 7 updated.
+- The service itself is unchanged: no poller, signing, combine or chain-action code was touched.
+
+## 7.3.0 — 2026-11-04
 
 - **`--check-config` dry run** (`npm run check:config`, `node index.js --check-config`). Validates a
   member host before the key ceremony, when the fail-closed boot self-check cannot run: runtime,

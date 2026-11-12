@@ -353,10 +353,11 @@ except two:
 | `share.parses` `ok … local fingerprint <64 hex>` | the fingerprint equals the one the ceremony operator gave you on the second channel (2.4) | the staged values are a consistent share of **that** key |
 | `account.permission` `ok <member>@rngops carries <key>` | | `EOS_ORNG_PRIVATE_KEY` is the `rngops` key |
 | `config.accounts`, `config.shareParams` | `<member>@rngops → orng.wax`, `… index <i>` | the account and index you configured are the ones you were given |
-| `chain.oracleRow` | **`warn`** — not in `oracles.a` yet | expected until `setoracles` |
+| `chain.oracleRow` | **`warn`** — not in `oracles.a` yet (new member); **`FAIL`** `ORACLE_INDEX_MISMATCH` if you are an existing member whose index moves | expected until `setoracles`; the index case becomes a `warn` with `--proposal` below |
 | `share.consistent` | **`FAIL`** — does not match the active `pubkeys[<old ver>]`, with the note that a new key version looks like this | expected: your share is for the next key, not the current one |
 
-Any other `FAIL` is a real misconfiguration. Keep both secrets in the root-owned, mode `0600`
+Any other `FAIL` is a real misconfiguration. Those expected lines are the ones the proposal
+check below turns into warnings once it can see what the switch will install. Keep both secrets in the root-owned, mode `0600`
 `EnvironmentFile` (3.1) rather than in `Environment=` lines of the unit: unit files are readable by
 every local user and `systemctl show -p Environment` prints their values.
 
@@ -378,15 +379,16 @@ and adds:
 | Line | Meaning |
 | --- | --- |
 | `proposal.found` | the proposal exists and has not expired (action count, expiry) |
-| `proposal.actions` | every action is on `orng.wax`; anything else is a `FAIL` |
-| `proposal.setpubkey` | the proposed key: version, size, fingerprint; `ok` when it equals the fingerprint of your staged `SHARE_KEY_PUBLIC_KEY_N`, `FAIL` when your share is for a different key, `skip` (fingerprint printed) when no share is staged |
-| `proposal.setoracles` | your account is at position `SHARE_KEY_SHARE_INDEX` of the proposed member list; `FAIL` names the position it is at, or that it is missing |
+| `proposal.actions` | every action is on `orng.wax`, authorised by it and decodable with its ABI; anything else is a `FAIL` |
+| `proposal.setpubkey` | the proposed key: version (must be the next `pubkeys` version, with a modulus not already installed), size, fingerprint; `ok` when it equals the fingerprint of your staged `SHARE_KEY_PUBLIC_KEY_N`, `FAIL` when your share is for a different key, `skip` (fingerprint printed) when no share is staged |
+| `proposal.setoracles` | the proposed member list has `SHARE_KEY_NUM_PARTIES` distinct members and your account is at position `SHARE_KEY_SHARE_INDEX`; `FAIL` names the position it is at, or that it is missing. A proposal without `setoracles` passes only if you are already registered at that index |
 | `proposal.unpause` | the transaction ends with `pauserequest(false)` (`warn` otherwise — the producers then un-pause separately) |
 | `share.consistentProposed` | the full share consistency check against the proposed modulus |
 
 When the share matches the proposed key, `share.consistent` becomes a `warn` ("does not match
-the active key but matches the proposed one") instead of a `FAIL`, so a correctly staged member
-**exits 0**. The proposal's fingerprint is also what the producers compare against the ceremony
+the active key but matches the proposed one") instead of a `FAIL`, and when the proposed list puts
+you at your configured index an `ORACLE_INDEX_MISMATCH` on `chain.oracleRow` becomes a `warn` too,
+so a correctly staged member **exits 0**. The proposal's fingerprint is also what the producers compare against the ceremony
 attestation before they approve; checking it from your own share is independent of both.
 
 `Dockerfile_eks` builds the same tree into a container image (`docker build -f Dockerfile_eks .`);

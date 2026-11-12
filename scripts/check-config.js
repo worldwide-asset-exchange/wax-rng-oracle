@@ -5,7 +5,9 @@
  * Validate this host's configuration for an orng.wax member without a share:
  * runtime, configuration shape, signing key, API node, contract state, the
  * account's permission and resources — and the share itself when SHARE_KEY_*
- * are already staged. Starts nothing, pushes nothing, prints no secret.
+ * are already staged. `--proposal <proposer>/<name>` (or CHECK_PROPOSAL) also
+ * checks the share and index against the pending eosio.msig switch.
+ * Starts nothing, pushes nothing, prints no secret.
  * Exit 0 when nothing would stop the service from starting, 1 otherwise.
  */
 require('dotenv').config();
@@ -23,10 +25,19 @@ process.env.LOGGER_LEVEL = process.env.LOGGER_LEVEL || 'error';
 async function main() {
   const config = require('../lib/config/configLoader').loadConfig();
   const { createPlainRpc } = require('../lib/config/eos');
-  const { runConfigChecks, formatReport } = require('../lib/checkConfig');
+  const {
+    runConfigChecks,
+    formatReport,
+    parseProposalArg,
+  } = require('../lib/checkConfig');
   const { version } = require('../package.json');
 
-  const report = await runConfigChecks({ config, rpc: createPlainRpc() });
+  const proposal = parseProposalArg(process.argv.slice(2)); // throws → exit 2
+  const report = await runConfigChecks({
+    config,
+    rpc: createPlainRpc(),
+    proposal,
+  });
   process.stdout.write(`${formatReport(report, { version })}\n`);
   return report.passed ? 0 : 1;
 }

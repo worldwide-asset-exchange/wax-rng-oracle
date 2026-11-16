@@ -2,7 +2,7 @@
 
 This guide takes a WAX block producer from a fresh account to a running member of the
 `orng.wax` 2-of-3 threshold-RSA oracle: a member that passes the boot self-check, signs
-partials, combines, and claims its stipend. It is written against `wax-rng-oracle` **7.4.0**,
+partials, combines, and claims its stipend. It is written against `wax-rng-oracle` **7.5.0**,
 contract `orng.wax` **v3.4.0** and signing library `@waxio/rsa-threshold-signatures` **2.0.0**.
 Every action, table and variable named here exists in that code.
 
@@ -47,6 +47,17 @@ Placeholders are in angle brackets. Nothing in this document is a real key or sh
 - A reliable WAX API node (`<api-url>`): the process polls `reqs` several times a second and
   pushes transactions. Run your own node or contract one you trust; a lagging or lying node can
   only make the member stop or refuse to start, never sign under a wrong key, but it costs requests.
+  The node you **push through** must also carry the transactions as the chain would:
+  - **No `actor-whitelist`** in its `config.ini`, or one that includes `orng.wax`, `<member>` and
+    every dApp that will ever receive a result. `setrand` runs the dApp's callback inline, so a
+    whitelist without them rejects the delivery with `authorizing actor(s) in transaction are not
+    on the actor whitelist: ["orng.wax"]` while every other node would have accepted it.
+  - **`disable-subjective-api-billing = true`** (the nodeos default). Three members race every
+    `setrand`; the two losers' `no request found` rejections count as failures against `<member>`
+    on a node that bills subjectively, which then refuses the next pushes with `transaction <id>
+    exceeded failure limit for account <member> until <time>`. See 6.6.
+  - Synced: a node behind head shows you requests only after the others have delivered them.
+    `/health-check` reports `headBlockLagSeconds` (6.4); the dry run warns above 30 s.
 - WAX mainnet chain id: `1064487b3cd1a897ce03ae5b6a865651747e2e152090f99c1d19d44e01aea5a4`.
 - `cleos` (or any Antelope CLI) for the account steps.
 - `git`, `npm`.
@@ -133,6 +144,22 @@ done
   and one `cleanup` a day. Stake CPU and NET on `<member>` accordingly and watch for
   `tx_cpu_usage_exceeded` in the logs. `EOS_ORNG_MAX_CPU` (ms, default `100`) caps what one
   transaction may bill. Measure on testnet before mainnet.
+
+  NET is the one that runs out. A `submitpart` carries a 1024-hex partial (about 1.1 KB of NET),
+  a `setrand` a full signature of the same size, and the member pushes one `submitpart` per
+  request plus the `setrand`s it wins. Measured on mainnet 2026-11-16 at about 4,600 requests a
+  day, one member used **7.5 MB of NET in 24 h**. Size for three times that and re-check after a
+  busy day with `cleos get account <member>` (`net bandwidth: used / available`):
+
+  | Daily requests on `orng.wax` | NET a member uses in 24 h | Stake that keeps 3× headroom (at ~52 KB/day per WAX staked, 2026-11-16) |
+  | --- | --- | --- |
+  | 2,500 | ~4 MB | 250 WAX |
+  | 5,000 | ~8 MB | 500 WAX |
+  | 10,000 | ~16 MB | 1,000 WAX |
+
+  The WAX-to-bytes rate moves with the total NET staked on the chain, so read it from
+  `get account` (`net_limit.max` ÷ staked) rather than from this table. CPU is far from the limit
+  at these rates (a `submitpart` bills ~100 µs); a few hundred WAX of CPU is plenty.
 - **RAM**: the contract pays. `submitpart` rewrites the `reqs` row and `markfailed` writes
   `undelivered1` with `orng.wax` as payer; the dApp pays for the `reqs` row itself. Your
   account only needs the few hundred bytes the permission and links above consume.
@@ -362,9 +389,11 @@ check below turns into warnings once it can see what the switch will install. Ke
 every local user and `systemctl show -p Environment` prints their values.
 
 **2. Against the pending proposal.** Once the producers have proposed the switch
-(`eosio.msig`, usually days before they execute it — ask the ceremony operator for the proposer
-account and proposal name), add `--proposal <proposer>/<name>` (or set
-`CHECK_PROPOSAL=<proposer>/<name>`) to the same dry run:
+(`eosio.msig`, usually days before they execute it), add `--proposal <proposer>/<name>` (or set
+`CHECK_PROPOSAL=<proposer>/<name>`) to the same dry run. The ceremony operator announces the
+proposer account and proposal name together with the fingerprint; it looks like `4tioi.waa/rng.switch`
+and is **not optional** — without it the dry run cannot know a switch is coming and reports the
+expected `FAIL share.consistent` of step 1:
 
 ```bash
 systemd-run --pipe --wait --collect -p User=rng-oracle -p WorkingDirectory=/opt/wax-rng-oracle \
@@ -428,11 +457,42 @@ ReadWritePaths=/var/lib/wax-rng-oracle
 WantedBy=multi-user.target
 ```
 
+The unit names a service user and group that must exist before the first start, and the
+checkout must be readable by that user:
+
 ```bash
+useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin rng-oracle
+chown -R root:rng-oracle /opt/wax-rng-oracle && chmod -R g+rX /opt/wax-rng-oracle
 install -o root -g root -m 0600 member.env /etc/wax-rng-oracle/member.env
 systemctl daemon-reload && systemctl enable --now wax-rng-oracle
 journalctl -u wax-rng-oracle -f
 ```
+
+If the unit flaps without a single line from the process in the journal, systemd could not even
+start it. `systemctl status wax-rng-oracle` shows the reason as `status=2xx/<WORD>`:
+
+| `status=` | Meaning | Fix |
+| --- | --- | --- |
+| `217/USER` | the `User=` account does not exist | `useradd` above, or set `User=` to the account you created |
+| `216/GROUP` | the `Group=` does not exist | same for the group |
+| `200/CHDIR` | `WorkingDirectory=` missing or not readable by the user | check the path and the `chown`/`chmod` above |
+| `203/EXEC` | `ExecStart=` binary not found at that path | `command -v node`; a node installed through nvm/mise lives under the installing user's home — use that absolute path or a system node |
+| `226/NAMESPACE` | a `ReadWritePaths=` directory does not exist | `StateDirectory=` creates `/var/lib/wax-rng-oracle` on first start; a different path has to exist already |
+| `1/FAILURE` with log lines | the process itself exited 1 | read the lines above it: boot self-check (6.2 / 7), configuration, port in use |
+
+The process logs to stdout, so the journal is its log. To keep a plain file as well, add to the
+unit:
+
+```ini
+LogsDirectory=wax-rng-oracle
+StandardOutput=append:/var/log/wax-rng-oracle/oracle.log
+StandardError=inherit
+```
+
+and rotate it with `logrotate` (`copytruncate`). Lines go only to the file then; to keep them
+out of `/var/log/syslog` instead while leaving them in the journal, add an rsyslog rule such as
+`if $programname == "node" and $!_SYSTEMD_UNIT == "wax-rng-oracle.service" then stop`. Colour
+codes are emitted only on a terminal (`LOGGER_COLOR=true|false` overrides).
 
 ## 5. Verify
 
@@ -529,7 +589,7 @@ firewall the port or put it behind a reverse proxy that does the access control)
 
 | Path | Returns | Status |
 | --- | --- | --- |
-| `/health-check` | `{"healthy","eos","bootCheck":{"ran","ok","rpcReachable","activeKeyFound","oracleIndexMatches","shareConsistent","activeVer"}}` — booleans and the key version, never key material | 200 when `eos` and `bootCheck.ok` are both true, else 500 |
+| `/health-check` | `{"healthy","eos","headBlockLagSeconds","bootCheck":{"ran","ok","rpcReachable","activeKeyFound","oracleIndexMatches","shareConsistent","activeVer"}}` — booleans, the key version and the age of the node's head block in seconds (`null` when the node did not answer), never key material | 200 when `eos` and `bootCheck.ok` are both true, else 500; the lag does not change the status |
 | `/version` | `{"version":"X.Y.Z"}` from `package.json` | 200 |
 | `/jobs`, `/jobs/<id>` | this process's own back-off / parking state (`DB_FILE`), not the chain | 200 |
 
@@ -548,6 +608,7 @@ StatsD metrics (`METRICS_HOST:METRICS_PORT`, prefix `METRICS_PREFIX`, default `w
 | `seeds_to_be_send_loaded`, `seeds_to_execute_loaded`, `undelivered_jobs_loaded`, `seeds_pending` | gauge | queue depths seen on chain |
 | `seeds_sent`, `set_part_failed`, `job_collision` (tag `contract`) | counter | partials submitted / failed / already on chain from your other instance (6.6) |
 | `executed_job`, `execute_failed`, `markfail_failed` (tag `contract`) | counter | combines delivered / failed / `markfailed` itself failed |
+| `setrand_rejected` (tags `contract`, `code`) | counter | the API node refused a `setrand` (`code` is the nodeos exception name: `tx_cpu_usage_exceeded`, `actor_whitelist_exception`, …); retried, never `markfailed` (6.5) |
 | `combine_failed` (tags `contract`, `code`) | counter | parts on chain did not combine; `code` is the library's `CombineError` code |
 | `combine_rejected_part`, `combine_suspect_share` (tags `contract`, `idx`) | counter | a specific member's partial was malformed / only in failing subsets — `idx` names the suspect |
 | `key_version_skipped` (tag `ver`) | counter | requests under a key version this member did not verify |
@@ -555,7 +616,11 @@ StatsD metrics (`METRICS_HOST:METRICS_PORT`, prefix `METRICS_PREFIX`, default `w
 | `eos.response_time.get_seeds_to_be_send`, `…get_job_to_execute`, `…get_undelivered_to_retry` | timing | RPC latency |
 
 **Host-side alerts** (from the metrics and the endpoint): any heart-beat gauge stale for a minute;
-`/health-check` not 200; `combine_suspect_share` with your own `idx`; `key_version_skipped` > 0;
+`/health-check` not 200; `headBlockLagSeconds` above 30 for more than a minute (your node is
+behind head: you see requests only after the others delivered them — one member signed nothing
+for ten minutes on the switch day for exactly this reason while `/health-check` said 200);
+`setrand_rejected` more than a few times an hour (your push node is throttling or whitelisting
+you, 6.6 / 7); `combine_suspect_share` with your own `idx`; `key_version_skipped` > 0;
 `seeds_pending` ≥ `JOB_PENDING_ALERT_MAX_JOB_PENDING`; the unit restarting more than a few times
 an hour (`systemctl show -p NRestarts wax-rng-oracle`).
 
@@ -574,7 +639,7 @@ host, against a history API or your own node, on a schedule:
   dropping to zero on one instance means the other one is dead (6.6).
 
 With `SLACK_WEBHOOK` set the process posts `RNG poller ERROR` (a `submitpart` failed), `RNG poller
-execute ERROR`, `RNG poller markfailed ERROR`, `RNG poller combine ERROR` (throttled to one a minute
+execute ERROR`, `RNG poller setrand REJECTED by API node`, `RNG poller markfailed ERROR`, `RNG poller combine ERROR` (throttled to one a minute
 with a suppressed count), `RNG retry deliver ERROR`, `RNG cleanup ERROR` and `RNG poller ALERT`
 (pending requests over the threshold). Log lines worth a rule: `Boot self-check FAILED`,
 `Refusing to start`, `Oracle <member> is suspended`, `Oracle <member> is unknown`,
@@ -588,6 +653,19 @@ with a suppressed count), `RNG retry deliver ERROR`, `RNG cleanup ERROR` and `RN
   failed on and not retried until the on-chain parts change. Any other execute or delivery failure
   backs off from 500 ms, doubling, up to `2^JOB_RETRY_MAX_RETRIES × 500 ms` (default 4 s), then
   stops. Entries clear once the row leaves the chain. `DB_FILE` holds only this back-off state.
+- A `setrand` that fails is sorted by **where** it failed before anything is pushed:
+  - `no request found`: another member (or your twin) delivered first — dropped, `job_collision`.
+  - The node refused to carry the transaction (nodeos exception families other than
+    `action_validate` / `wasm`: `tx_cpu_usage_exceeded` including the subjective `exceeded failure
+    limit`, `tx_net_usage_exceeded`, `actor_whitelist_exception`, `expired_tx_exception`, an HTTP
+    error from a proxy, …): nothing ran on chain and the request is still deliverable, so the
+    process logs `API node rejected setrand (<exception>)`, counts `setrand_rejected` and retries
+    with the back-off above. It never pushes `markfailed` for these (before 7.5.0 it did, which
+    parked deliverable results in `undelivered1` until a `retrydeliver` picked them up).
+  - The delivery itself failed inside contract code (`eosio_assert` from the dApp's callback,
+    `abort`, an unknown `receiverand`, a WASM fault): the result is recorded with `markfailed`,
+    carrying the full signature and the node's first error line, so the dApp can `getresult` it
+    and `retrydeliver` can try again.
 
 ### 6.6 Redundancy
 
@@ -614,9 +692,14 @@ to your account. Requirements:
 - Subjective billing. nodeos does not bill API-pushed rejections to the account by default
   (`disable-subjective-api-billing = true`). If a node you push through has that set to `false`,
   thousands of `duplicate part` rejections a day accumulate against `<member>` on that node and
-  both instances stall there with `tx_cpu_usage_exceeded` while the chain shows CPU to spare. Add
-  `disable-subjective-account-billing = <member>` to that node's `config.ini`, or push through a
-  node with the default. Do not run active-active through a public API node you do not control.
+  both instances stall there with `tx_cpu_usage_exceeded` while the chain shows CPU to spare. The
+  same applies **without** a twin: every member loses about two `setrand` races in three to the
+  other members, and on such a node those `no request found` rejections trip the per-account
+  failure limit — the next pushes are refused with `transaction <id> exceeded failure limit for
+  account <member> until <time>` (`setrand_rejected`, 6.5). Add
+  `disable-subjective-account-billing = <member>` to that node's `config.ini` or set
+  `disable-subjective-api-billing = true`, or push through a node with the default. Do not run
+  through a public API node you do not control.
 - Expect `job_collision` at roughly half the request rate on each instance.
 
 **Warm standby** boots fully (share self-check against the chain included), serves `/health-check`
@@ -655,6 +738,12 @@ Boot self-check codes appear in `Refusing to start: boot self-check failed (<cod
 | `missing required authority` / `transaction declares authority` on push | `rngops` not linked to that action, or `EOS_ORNG_PRIVATE_KEY` is not the `rngops` key | redo 1.1–1.2 |
 | `tx_cpu_usage_exceeded`, `billed CPU time … greater than` | not enough CPU staked, or `EOS_ORNG_MAX_CPU` too low | stake more / raise the cap |
 | `tx_cpu_usage_exceeded` from one node only, `get_account` shows CPU to spare, two live instances | that node subjectively bills the loser's rejected transactions (6.6) | `disable-subjective-account-billing = <member>` on that node, or push through a node with the default |
+| `API node rejected setrand (tx_cpu_usage_exceeded): transaction … exceeded failure limit for account <member> until …` | your push node bills subjectively; the lost `setrand` races tripped its per-account failure limit (6.6) | `disable-subjective-api-billing = true` (or `disable-subjective-account-billing = <member>`) on that node, or push through a node with the default. Harmless to the service — the other members deliver — but you win fewer races |
+| `API node rejected setrand (actor_whitelist_exception): … not on the actor whitelist: ["orng.wax"]` | your push node has an `actor-whitelist` that excludes `orng.wax` (the delivery runs inline as `orng.wax`) | remove the whitelist or add `orng.wax` and the dApps; or push through a node without one. Nothing reaches the chain from you for these requests |
+| `HTTP API cannot listen on port <n> (EADDRINUSE)` then exit 1 | another process holds `EXPRESS_APP_PORT` | pick another port or stop the other process (before 7.5.0 this was silent: the member signed but `/health-check` never answered) |
+| `net usage … too high` / `tx_net_usage_exceeded` | NET stake exhausted (1.3) | stake more NET; check `get account` `net bandwidth` after a busy day |
+| `headBlockLagSeconds` high on `/health-check`, no `submitpart` from you while `reqs` is busy | your API node is behind head | fix or replace the node; the process needs no restart |
+| `status=217/USER`, `216/GROUP`, `200/CHDIR`, `203/EXEC`, `226/NAMESPACE` in `systemctl status`, nothing from the process in the journal | systemd could not start the unit | table in section 4 |
 | `combine failed (NO_VALID_SUBSET) … rejected parts [<idx>@…]` | another member's partial is bad | nothing on your side; the suspect `idx` is in the log and metric |
 | `combine_suspect_share` with **your** `idx` | your share no longer matches the active key | restart (the boot check will tell you); re-key if the key rotated |
 | `Contract is paused` / `/health-check` 500 with `eos:false` | governance paused `orng.wax` / RPC unreachable now | wait / fix the node; the poller keeps retrying |
@@ -695,6 +784,7 @@ Everything below is mapped in `config/custom-environment-variables.json`; defaul
 | `EXPRESS_APP_ENABLE` | `expressApp.enable` | `true` | serve `/health-check`, `/version`, `/jobs` | no |
 | `EXPRESS_APP_PORT` | `expressApp.port` | `3000` | HTTP port | no |
 | `LOGGER_LEVEL` | `logger.level` | `debug` | winston level (`info` for production) | no |
+| `LOGGER_COLOR` | — (read directly) | on a terminal only | `true`/`false` forces ANSI colour on or off; unset = colour only when stdout is a TTY | no |
 | `METRICS_HOST` / `METRICS_PORT` / `METRICS_PREFIX` | `metrics.*` | `localhost` / `8125` / `wax-rng-oracle` | StatsD target | no |
 | `SLACK_WEBHOOK` | `slackWebhook` | empty | incoming-webhook URL; empty disables alerts | no |
 | `SECRETS_MANAGER_SECRET_ID` | `secretsManager.secretId` | none | `@waxio/wax-config` only (3.1) | no |

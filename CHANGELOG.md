@@ -13,7 +13,43 @@ change that earns it; `/version` echoes it. The maintainers' image pipeline only
 production image: it tags its build `v` + the app version (`v7.2.0` builds `7.2.0`), so the release
 tag and the image tag carry one number. The image digest remains the real identity of what deploys.
 
-## 7.4.0 — unreleased
+## 7.5.0 — unreleased
+
+- **`setrand` rejections are classified before anything is pushed** (`lib/deliveryError.js`,
+  WBP-2083). Only a failure *inside contract code* (nodeos `action_validate` / `wasm` exception
+  families: the dApp's callback asserted, aborted, is missing, or faulted) is a delivery failure and
+  earns a `markfailed` carrying the computed signature. A transaction the API node refused to carry
+  — `tx_cpu_usage_exceeded` including the subjective `exceeded failure limit for account`,
+  `tx_net_usage_exceeded`, `actor_whitelist_exception`, expiry, an HTTP error without a body — is
+  logged as `API node rejected setrand (<exception>)`, counted as `setrand_rejected` (tags
+  `contract`, `code`), alerted as `RNG poller setrand REJECTED by API node`, and retried with the
+  existing back-off; it never pushes `markfailed`. In the first three days after the 2026-11-13
+  key switch 184 `markfailed` rows (1.25 % of requests) were exactly these two node-side messages,
+  none a dApp failure; every one made a dApp wait for a `retrydeliver`. `no request found` is still a
+  collision. A rejection whose JSON has no `error` body (proxy 502) no longer throws a `TypeError`
+  out of the execute loop. `test/delivery-error.test.js`, `test/execute-rejection.test.js`
+  (fails on 7.4.0: three of six cases).
+- **HTTP API port in use is fatal and says so.** `app.listen` had no `error` handler, so
+  `EADDRINUSE` was an unhandled event: the process signed normally with no `/health-check` and no
+  log line (an operator hit this on the switch day). It now logs `HTTP API cannot listen on port <n>`
+  and exits 1 for the supervisor to restart. `test/app-listen.test.js`.
+- **`/health-check` reports `headBlockLagSeconds`**: the age of the API node's head block when
+  `get_info` answered (`null` when it did not). Informational — the status code is unchanged — so
+  a host can alert on a lagging node, the one failure mode the switch day showed `/health-check`
+  cannot see (a member signed nothing for ten minutes behind a lagging node while returning 200).
+  `test/health-check-lag.test.js`.
+- **Log colour only on a terminal.** `winston.format.colorize()` was unconditional, so journal and
+  file sinks carried ANSI codes. Colour is now on when stdout is a TTY, overridable with
+  `LOGGER_COLOR=true|false`.
+- Operator guide: prerequisites for the node a member *pushes through* (no `actor-whitelist`,
+  `disable-subjective-api-billing = true`, synced); NET sizing measured on mainnet (one member ≈
+  7.5 MB/day at 4,600 requests/day; stake table); `useradd` / `chown` before the unit and a table of
+  systemd `status=2xx/<WORD>` fast-exit codes (217/USER, 216/GROUP, 200/CHDIR, 203/EXEC,
+  226/NAMESPACE); log-to-file / keep-out-of-syslog recipes; the `--proposal` argument is announced by
+  the ceremony operator and is not optional; 6.5 describes the three `setrand` outcomes; 6.6 covers
+  the failure limit without a twin; 6.4 and 7 gained the new metric, endpoint field, alerts and rows.
+
+## 7.4.0 — 2026-11-12
 
 - **`--check-config --proposal <proposer>/<name>`** (also `CHECK_PROPOSAL`): the dry run reads the
   pending `eosio.msig` proposal that will switch the key and the member list, decodes it with the

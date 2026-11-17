@@ -22,13 +22,28 @@ tag and the image tag carry one number. The image digest remains the real identi
   — `tx_cpu_usage_exceeded` including the subjective `exceeded failure limit for account`,
   `tx_net_usage_exceeded`, `actor_whitelist_exception`, expiry, an HTTP error without a body — is
   logged as `API node rejected setrand (<exception>)`, counted as `setrand_rejected` (tags
-  `contract`, `code`), alerted as `RNG poller setrand REJECTED by API node`, and retried with the
-  existing back-off; it never pushes `markfailed`. In the first three days after the 2026-11-13
-  key switch 184 `markfailed` rows (1.25 % of requests) were exactly these two node-side messages,
-  none a dApp failure; every one made a dApp wait for a `retrydeliver`. `no request found` is still a
-  collision. A rejection whose JSON has no `error` body (proxy 502) no longer throws a `TypeError`
-  out of the execute loop. `test/delivery-error.test.js`, `test/execute-rejection.test.js`
-  (fails on 7.4.0: three of six cases).
+  `contract`, `code`), alerted as `RNG poller setrand REJECTED by API node` (throttled to one post
+  a minute with a suppressed count, like the combine alert), and retried with the existing
+  back-off — four attempts over about four seconds, after which the member leaves the request to
+  the other two; it never pushes `markfailed`. In the first three days after the 2026-11-13 key
+  switch 184 `markfailed` rows (1.25 % of requests) were exactly these two node-side messages, none
+  a dApp failure; every one made a dApp wait for a `retrydeliver`. `ram_usage_exceeded` (the dApp's
+  payer out of RAM) and `missing_auth_exception` are contract-side. `no request found` is still a
+  collision, and the pusher now reports it (and `paused`, `key retired`, `Result already marked as
+  undelivered`, `duplicate`) as `{skipped}` instead of `false`, so the poller counts `job_collision`
+  / `execute_skipped` instead of `executed_job`; `deadline exceeded` is no longer swallowed there
+  but classified and backed off like any node rejection. All five chain-action error paths read the
+  node's message through one helper, so a rejection whose JSON has no `error` body (proxy 502) no
+  longer throws a `TypeError` out of the loop, and the `send_transaction` return-failure-trace
+  shapes (`processed.except`, `result.except`) are classified by their code too.
+  `test/delivery-error.test.js`, `test/execute-rejection.test.js` (fails on 7.4.0: three of six
+  original cases).
+- **A rejected transaction push is never re-sent.** `fetchRetry` retried every non-2xx response up
+  to five times, `push_transaction` included; nodeos answers a rejected push with HTTP 500 and the
+  reason, so each lost `setrand` race was pushed five times and, on a node that bills subjectively,
+  counted as five failures against the member — the mechanism behind the `exceeded failure limit`
+  rows above. Pushes (`push_transaction`, `send_transaction`, `send_transaction2`) now return the
+  first response; reads keep the retry. `test/fetch-retry.test.js`.
 - **HTTP API port in use is fatal and says so.** `app.listen` had no `error` handler, so
   `EADDRINUSE` was an unhandled event: the process signed normally with no `/health-check` and no
   log line (an operator hit this on the switch day). It now logs `HTTP API cannot listen on port <n>`
@@ -37,10 +52,11 @@ tag and the image tag carry one number. The image digest remains the real identi
   `get_info` answered (`null` when it did not). Informational — the status code is unchanged — so
   a host can alert on a lagging node, the one failure mode the switch day showed `/health-check`
   cannot see (a member signed nothing for ten minutes behind a lagging node while returning 200).
-  `test/health-check-lag.test.js`.
+  The chain-time parser (`lib/chainTime.js`) is shared with `--check-config`, which used to carry
+  its own copy. `test/health-check-lag.test.js`.
 - **Log colour only on a terminal.** `winston.format.colorize()` was unconditional, so journal and
   file sinks carried ANSI codes. Colour is now on when stdout is a TTY, overridable with
-  `LOGGER_COLOR=true|false`.
+  `logger.color` / `LOGGER_COLOR=true|false`.
 - Operator guide: prerequisites for the node a member *pushes through* (no `actor-whitelist`,
   `disable-subjective-api-billing = true`, synced); NET sizing measured on mainnet (one member ≈
   7.5 MB/day at 4,600 requests/day; stake table); `useradd` / `chown` before the unit and a table of

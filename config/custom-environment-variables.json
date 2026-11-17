@@ -1,6 +1,7 @@
 {
   "logger": {
-    "level": "LOGGER_LEVEL"
+    "level": "LOGGER_LEVEL",
+    "color": "LOGGER_COLOR"
   },
   "readOnlyMode": "READONLY_MODE",
   "shareKey": {

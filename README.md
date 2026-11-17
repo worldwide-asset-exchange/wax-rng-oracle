@@ -104,7 +104,8 @@ resolved. `NODE_ENV=local3 CLUSTER_MODE=true node index.js` runs one member in c
   RPC is unreachable or a row is not visible yet, the check retries with back-off (default 6
   attempts, ≈ 1 min of waiting, plain RPC client with no inner retry) and then fails closed (see
   `BOOT_CHECK_*` below). It runs in every mode, `READONLY_MODE` included. `/health-check` reports the
-  outcome as booleans under `bootCheck` and is unhealthy unless it passed. The verified key version
+  outcome as booleans under `bootCheck` and is unhealthy unless it passed, and carries
+  `headBlockLagSeconds` (age of the API node's head block; informational). The verified key version
   also gates the poller: requests with another `ver` are skipped until the member restarts and
   re-checks (key rotation = re-key + restart).
 - **Combine diagnostics.** Partials read from `reqs.parts` are screened (hex string, integer index)
@@ -192,6 +193,8 @@ StatsD (`hot-shots`), prefix `METRICS_PREFIX`. Names as emitted by `lib/poller.j
 | `seeds_to_execute_loaded` | gauge | — | requests with enough partials to combine |
 | `executed_job` | counter | `contract` | full signatures delivered via `setrand` |
 | `execute_failed` | counter | `contract` | combine or `setrand`/`markfailed` path failed |
+| `setrand_rejected` | counter | `contract`, `code` | the API node refused to carry a `setrand` (`code` = nodeos exception name); retried, never `markfailed` |
+| `execute_skipped` | counter | `contract`, `reason` | the contract refused a `setrand` for a state reason (paused, key retired, result already parked) — nothing to retry |
 | `markfail_failed` | counter | `contract` | `markfailed` itself was rejected |
 | `combine_failed` | counter | `contract`, `code` | on-chain parts did not combine; `code` is the library's `CombineError` code |
 | `combine_rejected_part` | counter | `contract`, `idx` | a partial from share index `idx` was malformed and skipped |

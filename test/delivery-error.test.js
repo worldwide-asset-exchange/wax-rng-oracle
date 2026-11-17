@@ -4,7 +4,11 @@
 // 184 markfailed rows, none of them a delivery failure.
 const { expect } = require('chai');
 const { RpcError } = require('../lib/config/eos');
-const { classifyPushError, KIND } = require('../lib/deliveryError');
+const {
+  classifyPushError,
+  rpcErrorMessage,
+  KIND,
+} = require('../lib/deliveryError');
 
 function rpcError(code, name, message, extra = {}) {
   return new RpcError({
@@ -83,6 +87,12 @@ describe('classifyPushError (setrand rejection → markfailed or retry)', () => 
 
   for (const [code, name, msg] of [
     [
+      3080001,
+      'ram_usage_exceeded',
+      'account dapp.wax has insufficient ram; needs 1000 bytes has 10 bytes',
+    ],
+    [3090004, 'missing_auth_exception', 'missing authority of dapp.wax'],
+    [
       3050004,
       'eosio_assert_code_exception',
       'assertion failure with error code: 7',
@@ -135,6 +145,66 @@ describe('classifyPushError (setrand rejection → markfailed or retry)', () => 
     expect(r.kind).to.equal(KIND.NODE);
     expect(r.message).to.equal('Bad Gateway');
     expect(r.code).to.equal(null);
+  });
+
+  it('reads the send_transaction return_failure_trace shape (processed.except)', () => {
+    const err = new RpcError({
+      processed: {
+        except: {
+          code: 3050003,
+          name: 'eosio_assert_message_exception',
+          message: 'eosio_assert_message assertion failure',
+          stack: [
+            {
+              context: { level: 'error' },
+              format: 'assertion failure with message: ${s}',
+              data: { s: 'dapp refuses this result' },
+            },
+          ],
+        },
+      },
+    });
+    const r = classifyPushError(err);
+    expect(r.kind).to.equal(KIND.CONTRACT);
+    expect(r.code).to.equal(3050003);
+    expect(r.message).to.equal(
+      'assertion failure with message: dapp refuses this result'
+    );
+  });
+
+  it('reads result.except with a wasm fault as a contract failure, by code not by text', () => {
+    const err = new RpcError({
+      result: {
+        except: {
+          code: 3070002,
+          name: 'wasm_execution_error',
+          message: 'Runtime Error Processing WASM',
+          stack: [{ format: 'access violation', data: {} }],
+        },
+      },
+    });
+    expect(classifyPushError(err).kind).to.equal(KIND.CONTRACT);
+  });
+
+  it('rpcErrorMessage never throws on a bodiless RPC error and is empty for non-RPC errors', () => {
+    expect(
+      rpcErrorMessage(new RpcError({ code: 502, message: 'Bad Gateway' }))
+    ).to.equal('Bad Gateway');
+    expect(
+      rpcErrorMessage(
+        new RpcError({
+          code: 500,
+          message: 'x',
+          error: {
+            code: 3080006,
+            name: 'deadline_exception',
+            what: 'deadline exceeded',
+            details: [],
+          },
+        })
+      )
+    ).to.equal('deadline exceeded');
+    expect(rpcErrorMessage(new Error('socket hang up'))).to.equal('');
   });
 
   it('a plain Error is unknown', () => {

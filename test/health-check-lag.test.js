@@ -6,7 +6,7 @@ const chai = require('chai');
 const sinon = require('sinon');
 const { mockRequest, mockResponse } = require('mock-req-res');
 const HealthCheckController = require('../lib/controller/health-check');
-const { headBlockLag } = HealthCheckController;
+const { headBlockLagSeconds: headBlockLag } = require('../lib/chainTime');
 const { expect } = chai;
 const { match } = sinon;
 chai.use(require('sinon-chai'));
@@ -20,6 +20,17 @@ describe('/health-check headBlockLagSeconds', () => {
     expect(
       headBlockLag({ head_block_time: '2026-11-16T20:00:09.500Z' }, now)
     ).to.equal(1);
+  });
+
+  it('a zone letter inside the string does not count as a zone suffix', () => {
+    // only a trailing Z / offset means "has a zone"; anything else is UTC
+    const now = Date.parse('2026-11-16T20:00:10.000Z');
+    expect(
+      headBlockLag({ head_block_time: '2026-11-16T20:00:00.000' }, now)
+    ).to.equal(10);
+    expect(
+      headBlockLag({ head_block_time: '2026-11-16T20:00:00.000+00:00' }, now)
+    ).to.equal(10);
   });
 
   it('headBlockLag is null without a parseable time and never negative', () => {

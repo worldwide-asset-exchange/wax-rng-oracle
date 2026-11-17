@@ -609,6 +609,7 @@ StatsD metrics (`METRICS_HOST:METRICS_PORT`, prefix `METRICS_PREFIX`, default `w
 | `seeds_sent`, `set_part_failed`, `job_collision` (tag `contract`) | counter | partials submitted / failed / already on chain from your other instance (6.6) |
 | `executed_job`, `execute_failed`, `markfail_failed` (tag `contract`) | counter | combines delivered / failed / `markfailed` itself failed |
 | `setrand_rejected` (tags `contract`, `code`) | counter | the API node refused a `setrand` (`code` is the nodeos exception name: `tx_cpu_usage_exceeded`, `actor_whitelist_exception`, …); retried, never `markfailed` (6.5) |
+| `execute_skipped` (tags `contract`, `reason`) | counter | the contract refused a `setrand` for a state reason (`paused`, `key retired`, result already parked); nothing to retry (6.5) |
 | `combine_failed` (tags `contract`, `code`) | counter | parts on chain did not combine; `code` is the library's `CombineError` code |
 | `combine_rejected_part`, `combine_suspect_share` (tags `contract`, `idx`) | counter | a specific member's partial was malformed / only in failing subsets — `idx` names the suspect |
 | `key_version_skipped` (tag `ver`) | counter | requests under a key version this member did not verify |
@@ -660,8 +661,16 @@ with a suppressed count), `RNG retry deliver ERROR`, `RNG cleanup ERROR` and `RN
     limit`, `tx_net_usage_exceeded`, `actor_whitelist_exception`, `expired_tx_exception`, an HTTP
     error from a proxy, …): nothing ran on chain and the request is still deliverable, so the
     process logs `API node rejected setrand (<exception>)`, counts `setrand_rejected` and retries
-    with the back-off above. It never pushes `markfailed` for these (before 7.5.0 it did, which
-    parked deliverable results in `undelivered1` until a `retrydeliver` picked them up).
+    with the back-off above — four attempts over about four seconds, enough for a failure-limit
+    window, after which **this member leaves the request to the other two** (the entry stays
+    parked until the row leaves the chain). It never pushes `markfailed` for these (before 7.5.0
+    it did, which parked deliverable results in `undelivered1` until a `retrydeliver` picked them
+    up). A cause that does not go away (an actor whitelist) therefore shows as `setrand_rejected`
+    climbing and your share of deliveries falling, not as an outage — unless every member is
+    affected, in which case `reqs` fills up (6.4): fix the node.
+  - The contract refused for a reason nothing can retry (`no request found` because another member
+    delivered first — `job_collision`; `paused`, `key retired`, `Result already marked as
+    undelivered` — `execute_skipped`): dropped; the next poll re-reads the chain.
   - The delivery itself failed inside contract code (`eosio_assert` from the dApp's callback,
     `abort`, an unknown `receiverand`, a WASM fault): the result is recorded with `markfailed`,
     carrying the full signature and the node's first error line, so the dApp can `getresult` it
@@ -696,7 +705,8 @@ to your account. Requirements:
   same applies **without** a twin: every member loses about two `setrand` races in three to the
   other members, and on such a node those `no request found` rejections trip the per-account
   failure limit — the next pushes are refused with `transaction <id> exceeded failure limit for
-  account <member> until <time>` (`setrand_rejected`, 6.5). Add
+  account <member> until <time>` (`setrand_rejected`, 6.5). Before 7.5.0 the process also
+  re-sent every rejected push up to five times, so one lost race counted as five failures. Add
   `disable-subjective-account-billing = <member>` to that node's `config.ini` or set
   `disable-subjective-api-billing = true`, or push through a node with the default. Do not run
   through a public API node you do not control.
@@ -784,7 +794,7 @@ Everything below is mapped in `config/custom-environment-variables.json`; defaul
 | `EXPRESS_APP_ENABLE` | `expressApp.enable` | `true` | serve `/health-check`, `/version`, `/jobs` | no |
 | `EXPRESS_APP_PORT` | `expressApp.port` | `3000` | HTTP port | no |
 | `LOGGER_LEVEL` | `logger.level` | `debug` | winston level (`info` for production) | no |
-| `LOGGER_COLOR` | — (read directly) | on a terminal only | `true`/`false` forces ANSI colour on or off; unset = colour only when stdout is a TTY | no |
+| `LOGGER_COLOR` | `logger.color` | `null` (colour on a terminal only) | `true`/`false` forces ANSI colour on or off | no |
 | `METRICS_HOST` / `METRICS_PORT` / `METRICS_PREFIX` | `metrics.*` | `localhost` / `8125` / `wax-rng-oracle` | StatsD target | no |
 | `SLACK_WEBHOOK` | `slackWebhook` | empty | incoming-webhook URL; empty disables alerts | no |
 | `SECRETS_MANAGER_SECRET_ID` | `secretsManager.secretId` | none | `@waxio/wax-config` only (3.1) | no |

@@ -1,6 +1,7 @@
 {
   "logger": {
-    "level": "debug"
+    "level": "debug",
+    "color": null
   },
   "readOnlyMode": false,
   "shareKey": {

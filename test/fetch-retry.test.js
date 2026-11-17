@@ -53,6 +53,28 @@ describe('fetchRetry', function() {
     assert.equal(f.calls.length, 3);
   });
 
+  it('never re-sends a rejected transaction push (WBP-2083)', async function() {
+    for (const path of [
+      '/v1/chain/push_transaction',
+      '/v1/chain/send_transaction',
+      '/v1/chain/send_transaction2',
+    ]) {
+      const f = scripted([500, 200]);
+      const r = await fetchRetryFactory(5, 1000, f)('http://x' + path);
+      assert.equal(r.status, 500, path);
+      assert.equal(f.calls.length, 1, path);
+    }
+    // reads keep the retry
+    const g = scripted([500, 200]);
+    const r = await fetchRetryFactory(
+      5,
+      1000,
+      g
+    )('http://x/v1/chain/get_table_rows');
+    assert.equal(r.status, 200);
+    assert.equal(g.calls.length, 2);
+  });
+
   it('retries a non-2xx and returns the last one as-is', async function() {
     const f = scripted([500, 502, 503]);
     const r = await fetchRetryFactory(3, 1000, f)('http://x');
